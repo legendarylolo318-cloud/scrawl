@@ -136,6 +136,11 @@ pub struct State {
     pub text_history: Vec<Vec<store::CanvasText>>,
     pub last_was_text: bool,
     pub text_redo: Vec<Vec<store::CanvasText>>,
+    /// Where typing starts when you just type: the last place you clicked or wrote.
+    pub type_cursor: Option<(f32, f32)>,
+    /// The open text box was started by typing (cursor goes after the first letter).
+    pub textbox_typed: bool,
+    pub textbox_first: String,
 }
 
 impl State {
@@ -205,6 +210,9 @@ impl State {
             text_history: Vec::new(),
             last_was_text: false,
             text_redo: Vec::new(),
+            type_cursor: None,
+            textbox_typed: false,
+            textbox_first: String::new(),
             settings,
         };
         st.width_from_pen(0);
@@ -546,7 +554,9 @@ fn refresh_tools(ui: &MainWindow, st: &State) {
             let initial = id.and_then(|i| st.ws.as_ref().and_then(|w| w.page.texts.iter().find(|t| t.id == i).map(|t| t.text.clone()))).unwrap_or_default();
             ui.set_textbox_x(sx);
             ui.set_textbox_y(sy - 8.0);
+            let initial = if st.textbox_typed { st.textbox_first.clone() } else { initial };
             ui.set_textbox_initial(initial.into());
+            ui.set_textbox_select(!st.textbox_typed);
             ui.set_textbox_visible(true);
         }
         None => ui.set_textbox_visible(false),
@@ -929,7 +939,7 @@ fn main() -> Result<(), slint::PlatformError> {
         ui.on_plain_key(move |key| {
             let Some(ui) = w.upgrade() else { return false };
             let s = &mut *st2.borrow_mut();
-            let handled = actions::shortcut(&ui, s, &key, false, false, false, false);
+            let handled = actions::plain_key(&ui, s, &key);
             flush(&ui, s);
             handled
         });
@@ -1183,7 +1193,11 @@ fn main() -> Result<(), slint::PlatformError> {
     let timer = Rc::new(slint::Timer::default());
     {
         let (st2, weak2, timer2) = (st.clone(), weak.clone(), timer.clone());
-        ui.on_textbox_commit(with!(|ui, s, t = SharedString| actions::textbox_commit(s, &t)));
+        ui.on_textbox_commit(with!(|ui, s, t = SharedString| actions::textbox_finish(s, &t, true)));
+    ui.on_textbox_done(with!(|ui, s, t = SharedString| {
+        actions::textbox_finish(s, &t, false);
+        ui.invoke_focus_canvas();
+    }));
     ui.on_textbox_cancel(with!(|ui, s| {
         s.textbox = None;
         s.dirty |= dirty::TOOLS;
@@ -1356,6 +1370,20 @@ fn run_scene(ui: &MainWindow, st: &Rc<RefCell<State>>, scene: &str) {
                 let o: Vec<(f32, f32)> = (0..=30).map(|i| { let a = i as f32 / 30.0 * std::f32::consts::TAU; (175.0 + 14.0 * a.cos(), 346.0 + 14.0 * a.sin()) }).collect();
                 draw(&o);
                 ui.invoke_run_command("recognize".into());
+            }
+            "justtype" => {
+                ui.invoke_new_page("notes".into());
+                ui.invoke_pointer_down(140.0, 90.0);
+                ui.invoke_pointer_up();
+                // no tool chosen: just start typing
+                assert!(ui.invoke_plain_key("H".into()), "a letter starts a text box");
+                assert!(ui.get_textbox_visible() && ui.get_textbox_initial() == "H" && !ui.get_textbox_select());
+                ui.invoke_textbox_commit("Hello, this was typed without picking a tool".into());
+                assert!(ui.get_textbox_visible(), "Enter opens the next line");
+                ui.invoke_textbox_done("and Enter went to the next line; Esc finished".into());
+                assert!(!ui.get_textbox_visible());
+                assert!(ui.invoke_plain_key("2".into()), "digits type too when no candidates are shown");
+                ui.invoke_textbox_done("2 + 2 = 4 typed as plain text".into());
             }
             "palette" => ui.invoke_run_command("palette".into()),
             "pick" => {

@@ -76,6 +76,7 @@ fn selection_bbox(s: &State) -> Option<ink::Rect> {
 
 pub fn pointer_down(s: &mut State, x: f32, y: f32) {
     let (px, py) = s.view.to_page(x, y);
+    s.type_cursor = Some((px, py));
     s.down_at = Some(Instant::now());
     s.t0_ms = s.epoch.elapsed().as_millis() as u64;
     match s.tool {
@@ -1603,4 +1604,51 @@ fn insert_words(s: &mut State) {
     s.text_result.clear();
     s.set_status(format!("Added “{words}” to the page (Undo brings the ink back)"));
     s.dirty |= dirty::DOC;
+}
+
+/// A key pressed while the page has focus and no text box is open. Printable keys start typing
+/// right away (seamless notes); other keys (Delete, F-keys...) go to the shortcut table.
+pub fn plain_key(ui: &MainWindow, s: &mut State, key: &str) -> bool {
+    let printable = key.chars().count() == 1 && key.chars().all(|c| !c.is_control() && !('\u{F700}'..='\u{F8FF}').contains(&c));
+    if !printable || s.typing || s.rebinding.is_some() {
+        return shortcut(ui, s, key, false, false, false, false);
+    }
+    // 1-5 pick a recognition candidate when there are candidates to pick
+    if key.chars().all(|c| ('1'..='5').contains(&c)) && s.session.selected.is_some() && !s.text_mode {
+        return false;
+    }
+    // the click that placed the cursor left a dot of ink: typing right after it removes the dot
+    if let (Some((cx, cy)), Some(last)) = (s.type_cursor, s.doc.strokes.last()) {
+        let tiny = ink::bbox(&last.points).is_some_and(|r| r.diagonal() < 3.0 / s.view.scale.max(0.1));
+        let here = last.points.first().is_some_and(|p| (p.x - cx).abs() < 0.5 && (p.y - cy).abs() < 0.5);
+        if tiny && here {
+            let id = last.id;
+            s.doc.remove_ids(&[id]);
+            s.sync_ws();
+            clear_expression(s);
+            s.text_result.clear();
+        }
+    }
+    let (x, y) = s.type_cursor.unwrap_or_else(|| s.view.to_page(60.0, 60.0));
+    s.textbox = Some((None, x, y));
+    s.textbox_typed = true;
+    s.textbox_first = key.to_string();
+    s.dirty |= dirty::TOOLS;
+    true
+}
+
+/// Enter (`next_line`) or Esc in the canvas text box: place the text; Enter on new text opens a
+/// fresh box on the next line, like a notepad. An empty line ends typing.
+pub fn textbox_finish(s: &mut State, text: &str, next_line: bool) {
+    let Some((id, x, y)) = s.textbox else { return };
+    let was_new = id.is_none();
+    textbox_commit(s, text);
+    s.textbox_typed = false;
+    s.textbox_first.clear();
+    let line = 18.0 / s.view.scale.max(0.1) * 1.5;
+    s.type_cursor = Some((x, y + line));
+    if next_line && was_new && !text.trim().is_empty() {
+        s.textbox = Some((None, x, y + line));
+    }
+    s.dirty |= dirty::TOOLS;
 }

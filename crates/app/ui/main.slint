@@ -231,6 +231,7 @@ export component MainWindow inherits Window {
     in property <length> textbox-x;
     in property <length> textbox-y;
     in property <string> textbox-initial;
+    in property <bool> textbox-select: true;
     // ---- notes
     in property <[PageRow]> pages;
     in property <[PageRow]> search-results;
@@ -322,6 +323,7 @@ export component MainWindow inherits Window {
     callback pen-lifted();
     callback textbox-commit(string);
     callback textbox-cancel();
+    callback textbox-done(string);   // Esc: keep what was typed, stop typing
     callback set-delay(float);
     callback choose(int);
     callback set-spacing(float);
@@ -416,11 +418,14 @@ export component MainWindow inherits Window {
             }
             if e.text == Key.Escape && (root.focus-mode || root.present-mode) { root.run-command(root.present-mode ? "present" : "focus"); return accept; }
             if !root.typing && !e.modifiers.control && !e.modifiers.alt && !e.modifiers.meta {
+                // 1-5 pick a candidate only while candidates are shown in Math mode; otherwise they type
+                if root.candidates.length > 0 && root.mode == "math" {
                 if e.text == "1" { root.choose(0); return accept; }
                 if e.text == "2" { root.choose(1); return accept; }
                 if e.text == "3" { root.choose(2); return accept; }
                 if e.text == "4" { root.choose(3); return accept; }
                 if e.text == "5" { root.choose(4); return accept; }
+                }
                 if root.plain-key(e.text) { return accept; }
             }
             reject
@@ -677,8 +682,10 @@ export component MainWindow inherits Window {
                             tb := LineEdit {
                                 height: Theme.hit;
                                 text: root.textbox-initial;
-                                placeholder-text: "Type, then Enter (empty deletes)";
-                                init => { self.focus(); self.select-all(); }
+                                placeholder-text: "Type; Enter = next line, Esc = done";
+                                // editing existing text selects it; a box opened by typing keeps the cursor after the first letter
+                                init => { self.focus(); if root.textbox-select { self.select-all(); } else { self.set-selection-offsets(self.text.character-count, self.text.character-count); } }
+                                key-pressed(e) => { if e.text == Key.Escape { root.textbox-done(self.text); return accept; } reject }
                                 accepted(t) => { root.textbox-commit(t); }
                             }
                             ToolButton { label: "✓"; tip: "Place the text"; clicked => { root.textbox-commit(tb.text); } }
