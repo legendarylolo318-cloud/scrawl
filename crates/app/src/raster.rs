@@ -229,6 +229,7 @@ pub struct Overlay<'a> {
     pub light: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn fingerprint(strokes: &[Stroke], view: View, w: u32, h: u32, px_scale: f32, bg: [u8; 3], paper: Paper, extra: u64) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hs = std::collections::hash_map::DefaultHasher::new();
@@ -364,6 +365,7 @@ fn draw_overlay(pm: &mut Pixmap, o: &Overlay, view: View, px_scale: f32) {
 
 /// Render all strokes without the cache (tests). Highlighters are drawn under ink.
 #[cfg(test)]
+#[allow(dead_code)] // kept for tests and debugging
 pub fn render<'a>(strokes: impl Iterator<Item = &'a Stroke> + Clone, view: View, w: u32, h: u32, px_scale: f32, bg: [u8; 3], paper: Paper) -> Image {
     let all: Vec<Stroke> = strokes.cloned().collect();
     Canvas::default().frame(&all, None, view, (w, h), px_scale, bg, paper, None, None, &Overlay::default())

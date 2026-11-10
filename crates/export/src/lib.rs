@@ -197,7 +197,7 @@ pub fn latex_escape(s: &str) -> String {
         if k > 0 {
             out.push('$');
         }
-        if k % 2 == 1 && s.matches('$').count() % 2 == 0 {
+        if k % 2 == 1 && s.matches('$').count().is_multiple_of(2) {
             out += part; // inside inline math
             continue;
         }

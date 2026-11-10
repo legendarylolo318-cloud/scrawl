@@ -214,7 +214,7 @@ impl P<'_> {
                     "vmatrix" => format!("mat(delim: \"|\", {})", rows.join("; ")),
                     "Vmatrix" => format!("mat(delim: \"||\", {})", rows.join("; ")),
                     "matrix" => format!("mat(delim: #none, {})", rows.join("; ")),
-                    "cases" => format!("cases({})", body.split("\\\\").map(|r| r.replace('&', "&").trim().to_string()).filter(|r| !r.is_empty()).collect::<Vec<_>>().join(", ")),
+                    "cases" => format!("cases({})", body.split("\\\\").map(|r| r.trim().to_string()).filter(|r| !r.is_empty()).collect::<Vec<_>>().join(", ")),
                     _ => body,
                 }
             }

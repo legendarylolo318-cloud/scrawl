@@ -12,7 +12,7 @@ supersedes it where they disagree.
   agent's permission system, so you need to run it yourself (or allow it).
 - Linux release build: OK. `scrawl --self-test`: PASSES.
 - `cargo test --workspace --release`: all pass (the search bug below is fixed).
-- `cargo clippy --workspace --all-targets -- -D warnings`: **not re-run since the UI rewrite**, so expect some lints.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean.
 - `cargo audit` / `cargo deny`: installing them was started (`cargo install --locked cargo-audit cargo-deny`)
   but has not been checked, and neither has been run. There is no `deny.toml` yet.
 - Windows: **never built**. There is no Windows cross toolchain locally; it can only be checked in GitHub Actions
@@ -85,7 +85,7 @@ X11/Windows only. **winit has no Wayland DnD, so on Hyprland use paste or the fi
 
 ## Next session: start here
 
-1. Run clippy and fix the lints (all tests pass now).
+1. Clippy (`-D warnings`) and all tests pass as of commit "Clippy clean".
 2. Create the repo and push: `gh repo create legendarylolo318-cloud/scrawl --public --source . --push`. CI (`ci.yml`) then shows Windows build errors.
 3. Click through the UI (item 3 below).
 

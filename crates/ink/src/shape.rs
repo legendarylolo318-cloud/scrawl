@@ -112,7 +112,7 @@ mod tests {
     fn snaps_lines_circles_and_rectangles() {
         let wobbly = pts(|t| (t * 200.0, 50.0 + (t * 40.0).sin() * 1.5), 40);
         assert_eq!(snap_shape(&wobbly).unwrap().0, Shape::Line);
-        let circle = pts(|t| (100.0 + 60.0 * (t * 6.283).cos() + (t * 50.0).sin(), 100.0 + 60.0 * (t * 6.283).sin()), 60);
+        let circle = pts(|t| (100.0 + 60.0 * (t * std::f32::consts::TAU).cos() + (t * 50.0).sin(), 100.0 + 60.0 * (t * std::f32::consts::TAU).sin()), 60);
         assert_eq!(snap_shape(&circle).unwrap().0, Shape::Ellipse);
         let rect: Vec<Point> = [(0.0, 0.0), (100.0, 0.0), (100.0, 60.0), (0.0, 60.0), (0.0, 2.0)]
             .windows(2)
@@ -127,7 +127,7 @@ mod tests {
     fn leaves_freehand_and_tiny_strokes_alone() {
         let squiggle = pts(|t| (t * 100.0, (t * 12.0).sin() * 30.0), 60);
         assert!(snap_shape(&squiggle).is_none());
-        let small_o = pts(|t| (5.0 * (t * 6.283).cos(), 5.0 * (t * 6.283).sin()), 30);
+        let small_o = pts(|t| (5.0 * (t * std::f32::consts::TAU).cos(), 5.0 * (t * std::f32::consts::TAU).sin()), 30);
         assert!(snap_shape(&small_o).is_none(), "a small handwritten o is not a circle");
     }
 
