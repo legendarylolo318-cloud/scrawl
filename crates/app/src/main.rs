@@ -133,6 +133,8 @@ pub struct State {
     /// Text ink mode: handwriting becomes words instead of math.
     pub text_mode: bool,
     pub text_result: String,
+    /// Other readings of the handwritten text (the chip's "Not right?" buttons in Words mode).
+    pub text_alts: Vec<String>,
     /// Canvas text being typed: (existing text id or None, page x, page y).
     pub textbox: Option<(Option<u64>, f32, f32)>,
     pub text_cache: std::collections::HashMap<String, Arc<tiny_skia::Pixmap>>,
@@ -214,6 +216,7 @@ impl State {
             status: String::new(),
             text_mode: false,
             text_result: String::new(),
+            text_alts: Vec::new(),
             textbox: None,
             text_cache: Default::default(),
             text_history: Vec::new(),
@@ -653,7 +656,11 @@ pub fn refresh_graph(ui: &MainWindow, st: &State) {
 
 pub fn update_strip(ui: &MainWindow, st: &State) {
     update_chip(ui, st);
-    let cands: Vec<SharedString> = st.session.selected.and_then(|i| st.session.symbols.get(i)).map(|s| s.cands.iter().map(|c| SharedString::from(c.label.as_str())).collect()).unwrap_or_default();
+    let cands: Vec<SharedString> = if st.new_editor && st.text_mode {
+        st.text_alts.iter().map(|t| SharedString::from(t.replace('\n', " / "))).collect()
+    } else {
+        st.session.selected.and_then(|i| st.session.symbols.get(i)).map(|s| s.cands.iter().map(|c| SharedString::from(c.label.as_str())).collect()).unwrap_or_default()
+    };
     ui.set_candidates(model(cands));
     update_expr(ui, st);
 }
@@ -750,7 +757,7 @@ pub fn run_recognition(ui: &MainWindow, st: &mut State) {
                 if st.speller.is_none() {
                     st.speller = pagedoc::Speller::new();
                 }
-                st.text_result = handwriting::to_text(&st.session.symbols, st.speller.as_ref());
+                (st.text_result, st.text_alts) = handwriting::to_text_alts(&st.session.symbols, st.speller.as_ref());
             } else {
                 feed_editor(st);
             }
@@ -931,13 +938,22 @@ fn main() -> Result<(), slint::PlatformError> {
         s.dirty |= dirty::TOOLS;
     }));
     ui.on_choose(with!(|ui, s, i = i32| {
+        if s.text_mode && s.new_editor && !s.text_alts.is_empty() {
+            // Words mode: the buttons are whole-text readings
+            let i = i.max(0) as usize;
+            if i < s.text_alts.len() {
+                std::mem::swap(&mut s.text_result, &mut s.text_alts[i]);
+                s.dirty |= dirty::STRIP;
+            }
+            return;
+        }
         if s.session.choose(i.max(0) as usize, &s.doc.strokes) {
             if !s.typed_since_recog {
                 s.editor.set_expr(s.session.expression());
             }
             s.dirty |= dirty::STRIP;
             if s.text_mode {
-                s.text_result = handwriting::to_text(&s.session.symbols, s.speller.as_ref());
+                (s.text_result, s.text_alts) = handwriting::to_text_alts(&s.session.symbols, s.speller.as_ref());
             }
             s.set_status("Correction saved to your handwriting profile");
             tablet::push_state(s);
@@ -1458,6 +1474,23 @@ fn run_scene(ui: &MainWindow, st: &Rc<RefCell<State>>, scene: &str) {
                 let d = s.ws.as_ref().and_then(|w| w.page.doc.as_ref()).expect("document");
                 assert_eq!(d.paras[2].kind, notedoc::ParaKind::Bullet { indent: 0 }, "{:?}", d.paras);
                 assert!(d.paras.len() >= 5, "{:?}", d.paras);
+            }
+            "docword" => {
+                {
+                    let s = &mut *st.borrow_mut();
+                    s.new_editor = true;
+                    if let Some(ws) = &mut s.ws {
+                        ws.page.doc = Some(notedoc::Doc::from_markup("= Notes\nShopping list:"));
+                    }
+                    s.dirty |= dirty::CANVAS | dirty::TOOLS;
+                    flush(ui, s);
+                }
+                ui.invoke_set_tool("pen".into());
+                ui.invoke_set_mode("text".into());
+                draw(&line((100.0, 280.0), (100.0, 340.0)));
+                let o: Vec<(f32, f32)> = (0..=30).map(|i| { let a = i as f32 / 30.0 * std::f32::consts::TAU; (135.0 + 14.0 * a.cos(), 326.0 + 14.0 * a.sin()) }).collect();
+                draw(&o);
+                ui.invoke_run_command("recognize".into());
             }
             "menu" => ui.invoke_open_menu("insert".into()),
             "menumore" => ui.invoke_open_menu("more".into()),

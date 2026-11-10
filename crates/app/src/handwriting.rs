@@ -66,11 +66,12 @@ fn options(s: &SymbolRec) -> Vec<(char, f32)> {
 
 /// Choose the word: the most likely letter combination that is a dictionary word, else the raw
 /// best guess (spell-corrected when the dictionary has a close suggestion).
-fn word(opts: &[Vec<(char, f32)>], speller: Option<&Speller>) -> String {
+/// The word as ranked guesses, best first: dictionary words from the letter beam, then the raw reading.
+fn word_options(opts: &[Vec<(char, f32)>], speller: Option<&Speller>) -> Vec<String> {
     let raw: String = opts.iter().map(|o| o[0].0).collect();
-    let Some(sp) = speller else { return raw };
+    let Some(sp) = speller else { return vec![raw] };
     if opts.is_empty() || !opts.iter().all(|o| o.iter().any(|c| c.0.is_alphabetic())) {
-        return raw; // numbers and symbols are left alone
+        return vec![raw]; // numbers and symbols are left alone
     }
     // beam search over letter choices, scored by the product of probabilities
     let mut beam: Vec<(String, f32)> = vec![(String::new(), 1.0)];
@@ -85,17 +86,29 @@ fn word(opts: &[Vec<(char, f32)>], speller: Option<&Speller>) -> String {
         next.truncate(64);
         beam = next;
     }
+    let mut out: Vec<String> = Vec::new();
+    let push = |s: String, out: &mut Vec<String>| {
+        if !out.contains(&s) {
+            out.push(s);
+        }
+    };
     for (cand, _) in &beam {
         let lower = cand.to_lowercase();
         if sp.is_word(&lower) || sp.is_word(cand) {
-            return case_like(&lower, &raw);
+            push(case_like(&lower, &raw), &mut out);
+            if out.len() >= 4 {
+                break;
+            }
         }
     }
     let lower = raw.to_lowercase();
-    match sp.suggest_one(&lower) {
-        Some(s) if s.chars().count().abs_diff(lower.chars().count()) <= 1 && edit_distance(&s.to_lowercase(), &lower) <= 2 => case_like(&s, &raw),
-        _ => lower,
+    if let Some(s) = sp.suggest_one(&lower) {
+        if s.chars().count().abs_diff(lower.chars().count()) <= 1 && edit_distance(&s.to_lowercase(), &lower) <= 2 {
+            push(case_like(&s, &raw), &mut out);
+        }
     }
+    push(lower, &mut out);
+    out
 }
 
 /// Keep a capital first letter when the writer clearly made one; the rest lower case (the
@@ -125,9 +138,15 @@ fn edit_distance(a: &str, b: &str) -> usize {
 }
 
 /// Turn recognized symbols into lines of words.
+#[cfg(test)]
 pub fn to_text(symbols: &[SymbolRec], speller: Option<&Speller>) -> String {
+    to_text_alts(symbols, speller).0
+}
+
+/// The text plus up to five whole-text alternatives (one word swapped for its next-best reading).
+pub fn to_text_alts(symbols: &[SymbolRec], speller: Option<&Speller>) -> (String, Vec<String>) {
     if symbols.is_empty() {
-        return String::new();
+        return (String::new(), vec![]);
     }
     let mut heights: Vec<f32> = symbols.iter().map(|s| s.rect.height().max(4.0)).collect();
     heights.sort_by(f32::total_cmp);
@@ -143,7 +162,7 @@ pub fn to_text(symbols: &[SymbolRec], speller: Option<&Speller>) -> String {
             _ => lines.push(vec![i]),
         }
     }
-    let mut out = Vec::new();
+    let mut line_words: Vec<Vec<Vec<String>>> = Vec::new();
     for mut line in lines {
         line.sort_by(|&a, &b| symbols[a].rect.x0.total_cmp(&symbols[b].rect.x0));
         let mut words: Vec<Vec<Vec<(char, f32)>>> = vec![vec![]];
@@ -158,10 +177,26 @@ pub fn to_text(symbols: &[SymbolRec], speller: Option<&Speller>) -> String {
             last_x1 = Some(last_x1.map_or(r.x1, |x| x.max(r.x1)));
             words.last_mut().unwrap().push(options(&symbols[i]));
         }
-        let text: Vec<String> = words.iter().filter(|w| !w.is_empty()).map(|w| word(w, speller)).collect();
-        out.push(text.join(" "));
+        let ranked: Vec<Vec<String>> = words.iter().filter(|w| !w.is_empty()).map(|w| word_options(w, speller)).collect();
+        line_words.push(ranked);
     }
-    out.join("\n")
+    let render = |pick: &dyn Fn(usize, usize) -> usize| -> String {
+        let mut n = 0;
+        line_words.iter().map(|l| l.iter().map(|w| { let i = pick(n, w.len()); n += 1; w[i.min(w.len() - 1)].clone() }).collect::<Vec<_>>().join(" ")).collect::<Vec<_>>().join("\n")
+    };
+    let best = render(&|_, _| 0);
+    let total: usize = line_words.iter().map(Vec::len).sum();
+    let mut alts: Vec<String> = Vec::new();
+    for rank in 1..3 {
+        for w in 0..total {
+            let t = render(&|n, len| if n == w && rank < len { rank } else { 0 });
+            if t != best && !alts.contains(&t) {
+                alts.push(t);
+            }
+        }
+    }
+    alts.truncate(5);
+    (best, alts)
 }
 
 #[cfg(test)]
@@ -207,6 +242,14 @@ mod tests {
         s.push(k);
         let sp = Speller::new();
         assert_eq!(to_text(&s, sp.as_ref()), "hi you\nok");
+    }
+
+    #[test]
+    fn doubtful_words_offer_whole_text_alternatives() {
+        let s = vec![sym(0.0, &[("c", 0.5), ("e", 0.45)]), sym(24.0, &[("a", 0.9)]), sym(48.0, &[("t", 0.9)])];
+        let (best, alts) = to_text_alts(&s, Speller::new().as_ref());
+        assert_eq!(best, "cat");
+        assert!(alts.contains(&"eat".to_string()), "{alts:?}");
     }
 
     #[test]

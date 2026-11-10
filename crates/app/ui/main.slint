@@ -949,13 +949,11 @@ export component MainWindow inherits Window {
                             if root.candidates.length > 0 : HorizontalLayout {
                                 spacing: 4px; alignment: start;
                                 Text { text: "Not right?"; color: Theme.muted; font-size: Theme.fs-small; vertical-alignment: center; }
-                                for c[i] in root.candidates : Rectangle {
-                                    width: Theme.hit; height: Theme.hit; border-radius: 6px;
-                                    background: cta2.has-hover ? Theme.hover : Theme.surface;
-                                    border-width: i == 0 ? 2px : 0px; border-color: Theme.accent;
-                                    accessible-role: button; accessible-label: "Alternative " + (i + 1) + ": " + c;
-                                    Text { text: c; color: Theme.text; font-size: 22px * Theme.scale; horizontal-alignment: center; vertical-alignment: center; }
-                                    cta2 := TouchArea { clicked => { root.choose(i); } }
+                                for c[i] in root.candidates : ToolButton {
+                                    label: c;
+                                    tip: "Use " + c;
+                                    active: root.chip-math && i == 0;
+                                    clicked => { root.choose(i); }
                                 }
                             }
                         }
