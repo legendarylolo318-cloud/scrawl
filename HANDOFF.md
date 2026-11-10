@@ -24,7 +24,9 @@ supersedes it where they disagree.
   documented ignores in `deny.toml`/`.cargo/audit.toml` with a reason. `cargo deny` not run yet.
 - OLD NOTE (superseded): installing them was started (`cargo install --locked cargo-audit cargo-deny`)
   but has not been checked, and neither has been run. There is no `deny.toml` yet.
-- Windows: first build is the CI runs above (results not read yet). No local Windows toolchain.
+- Windows: **CI green** (runs 42785029618, 42785146887, 42785472501; ~1.5 h each): clippy, all tests and
+  `--self-test` pass on windows-latest, including the tablet CA via Windows Credential Manager.
+  Not yet built: the release workflow (AppImage, portable exe, Inno Setup installer).
 
 ## Done in this session
 
@@ -99,19 +101,14 @@ release.yml names fixed, version 1.0.0. Local and remote `main` are in sync.
 
 Do these in order:
 
-1. **Read the first CI results.** `gh run list --limit 3`, then `gh run view <id> --log-failed`
-   for any failed run. Run `42785029618` is the first-ever CI run (Ubuntu + Windows).
-   Likely problems: missing apt packages for winit/arboard (`libxkbcommon-x11-dev`, `libxcb*`),
-   Windows-only compile errors, tests that assume Unix paths or a keyring, and `--self-test`
-   printing nothing on Windows (release builds use `windows_subsystem = "windows"`; CI can only
-   rely on the exit code). Fix, push, repeat until green.
+1. DONE: first CI runs are green on Ubuntu and Windows (see "State right now").
 2. **Click through the UI** (see "Known broken" item 3): overlays, widths 1500/940/620/480, short
    heights, `SCRAWL_SHOT_SCALE=2`, `SCRAWL_SHOT_THEME=light`. Fix layout bugs found.
 3. **MATLAB `for` loops** (item 6): implement in `crates/media/src/matlab.rs` or the `matlab`
    screenshot scene stays broken.
 4. **Recognition** (item 7): a drawn "+" is ranked "±" first. Add an eval mode with shaky/tremor
    noise to `scrawl-train`, measure top-1/top-5, retrain if top-5 < 97 %, update `metrics.json`.
-5. **`cargo audit` and `cargo deny check`**: both still unrun. Add a `deny.toml` (licences: MIT,
+5. **`cargo audit` and `cargo deny check`**: audit run, fails (see "State right now"); deny still unrun. Add a `deny.toml` (licences: MIT,
    Apache-2.0, BSD, ISC, Zlib, Unicode, MPL-2.0, ODbL data note, Slint royalty-free licence).
 6. Performance numbers (item 9), README/CHANGELOG update with screenshots and numbers, Slint
    licence attribution.
