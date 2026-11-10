@@ -25,7 +25,8 @@ block, by design), physical access to an unlocked machine, and the security of y
    cannot be used to impersonate a real website (tested: a CA-signed certificate for `example.com` fails
    verification). The CA private key is stored in the OS keyring (Secret Service on Linux, Credential
    Manager on Windows), never as a plaintext file; only the public certificate is written to disk. Server
-   certificates are valid for 30 days and are re-issued when they near expiry or the LAN IPs change.
+   certificates are valid for 7 days and are re-issued in their last 2 days while the server runs (new
+   connections get the new certificate without a restart); a restart re-issues when the LAN IPs change.
 2. **One-time CA setup.** A separate plain-HTTP bootstrap endpoint serves only the CA certificate
    (`.mobileconfig` for iOS, `.crt` for Android). It exists only while the setup screen is open and closes
    after one download or 5 minutes. The PC shows the CA SHA-256 fingerprint so you can compare it on the
@@ -34,7 +35,8 @@ block, by design), physical access to an unlocked machine, and the security of y
    (browsers never send fragments, so it is not in any log or request). The token expires after 2 minutes.
    After scanning, both screens show the same 6-digit code and you must press Approve on the PC. Approved
    devices receive a random 256-bit secret (only its SHA-256 is stored on the PC); it is rotated at every
-   connection, devices unused for 30 days expire, and each device can be revoked. Five failed pairing
+   connection, devices unused for 30 days expire, and each device can be revoked. Revoking cuts off a
+   device that is connected at that moment, not only future connections (tested end to end). Five failed pairing
    attempts lock pairing for 5 minutes. A wrong token guess burns the token.
 4. **Least privilege.** The protocol has only: pair/authenticate, strokes, text, and UI commands for the
    active block. There is no message to read, list, export or delete notes and no filesystem access.
@@ -42,7 +44,10 @@ block, by design), physical access to an unlocked machine, and the security of y
    (<= 256 points per batch, coordinate/pressure/tilt bounds, text length) and rate-limited; malformed input
    is dropped without crashing (fuzz-tested). WebSocket upgrades require `Origin: https://<our host>`.
    Responses carry a strict Content-Security-Policy, HSTS, `nosniff`, `no-referrer`, `no-store`.
-   The web client is vanilla JS embedded in the binary and makes no third-party requests.
+   The web client is vanilla JS embedded in the binary and makes no third-party requests. The only
+   thing sent back to the device is the active expression (its candidates and a PNG render, `Frame`).
+   Pen tests in `crates/remote/tests/e2e.rs` cover path traversal on static routes, oversized frames,
+   huge point counts and floods from unpaired sockets.
 5. **Network exposure.** The server binds only to private-range interfaces (LAN and Tailscale), never to
    public interfaces. No UPnP, no port forwarding, no cloud relay. Away from home, use Tailscale: the
    tablet reaches the PC at its `100.x.y.z` address, which is inside the CA's permitted range. The app shows
