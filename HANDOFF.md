@@ -11,7 +11,7 @@ supersedes it where they disagree.
   (`gh repo create legendarylolo318-cloud/scrawl --public --source . --push`) was blocked by the
   agent's permission system, so you need to run it yourself (or allow it).
 - Linux release build: OK. `scrawl --self-test`: PASSES.
-- `cargo test --workspace --release`: **1 failing test** (see "Known broken" below). Everything else passes.
+- `cargo test --workspace --release`: all pass (the search bug below is fixed).
 - `cargo clippy --workspace --all-targets -- -D warnings`: **not re-run since the UI rewrite**, so expect some lints.
 - `cargo audit` / `cargo deny`: installing them was started (`cargo install --locked cargo-audit cargo-deny`)
   but has not been checked, and neither has been run. There is no `deny.toml` yet.
@@ -85,13 +85,13 @@ X11/Windows only. **winit has no Wayland DnD, so on Hyprland use paste or the fi
 
 ## Next session: start here
 
-1. Fix the failing search test (item 1 below), then run clippy and fix the lints.
+1. Run clippy and fix the lints (all tests pass now).
 2. Create the repo and push: `gh repo create legendarylolo318-cloud/scrawl --public --source . --push`. CI (`ci.yml`) then shows Windows build errors.
 3. Click through the UI (item 3 below).
 
 ## Known broken / not verified
 
-1. **Failing test** `workspace::tests::pages_templates_switching_trash_restore_and_search`:
+1. FIXED: search with filters matched every page in the notebook (the text clause was optional next to `+nb:`; now `+(...)`). Old note:
    `search("eigenvalues")` returns 2 hits instead of 1. Suspect: the persisted index adds the page in
    `ensure_index` and again in `save()`. `delete_term` is applied after the add, or the page is
    indexed under both the old and the new commit. Check `SearchIndex::add` and the manifest logic in

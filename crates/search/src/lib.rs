@@ -153,7 +153,8 @@ impl SearchIndex {
 
     pub fn search(&self, query: &str, filters: &Filters, limit: usize) -> tantivy::Result<Vec<Hit>> {
         let f = &self.f;
-        let mut q = format!("({})", if query.trim().is_empty() { "*".into() } else { query.to_string() });
+        // "+": the text must match too; next to the +nb/+tag filters an unprefixed clause is optional
+        let mut q = format!("+({})", if query.trim().is_empty() { "*".into() } else { query.to_string() });
         if query.trim().is_empty() {
             q = String::new();
         }
