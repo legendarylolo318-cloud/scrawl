@@ -1,4 +1,5 @@
 mod raster;
+mod selftest;
 mod session;
 
 use ink::{is_scribble, smooth_stroke, Document, EraserMode, InkMode, PenKind, Point, SmoothingConfig, Stroke};
@@ -160,6 +161,9 @@ fn refresh(ui: &MainWindow, st: &State) {
 }
 
 fn main() -> Result<(), slint::PlatformError> {
+    if std::env::args().any(|a| a == "--self-test") {
+        std::process::exit(selftest::run());
+    }
     let ui = MainWindow::new()?;
     let st = Rc::new(RefCell::new(State::new()));
     let weak = ui.as_weak();

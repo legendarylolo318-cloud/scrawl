@@ -6625,11 +6625,18 @@ dependencies = [
 name = "inkwell"
 version = "0.1.0"
 dependencies = [
+ "export",
  "ink",
+ "input 0.1.0",
  "layout",
+ "media",
  "recog",
+ "remote",
+ "render",
+ "search",
  "slint",
  "slint-build",
+ "store",
  "tiny-skia 0.11.4",
 ]
 

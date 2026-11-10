@@ -9,6 +9,13 @@ ink.workspace = true
 tiny-skia.workspace = true
 recog = { path = "../recog" }
 layout = { path = "../layout" }
+render = { path = "../render" }
+store = { path = "../store" }
+search = { path = "../search" }
+export = { path = "../export" }
+remote = { path = "../remote" }
+media = { path = "../media" }
+input = { path = "../input" }
 slint = "1.18"
 
 [build-dependencies]
