@@ -1,14 +1,7 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! Media: images, PDF import, lecture audio, function plotter. Heavy parts are lazy: nothing
+//! here allocates or spawns threads until used.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub mod audio;
+pub mod images;
+pub mod pdf;
+pub mod plot;
