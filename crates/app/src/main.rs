@@ -963,6 +963,17 @@ fn main() -> Result<(), slint::PlatformError> {
             let i = i.max(0) as usize;
             if i < s.text_alts.len() {
                 std::mem::swap(&mut s.text_result, &mut s.text_alts[i]);
+                // learn the letters that changed, so the same handwriting reads right next time
+                let mut learned = 0;
+                for (sym, ch) in handwriting::letters_for(&s.session.symbols, &s.text_result) {
+                    let was = s.session.symbols.get(sym).and_then(handwriting::reads_as);
+                    if ch.is_alphanumeric() && was.is_some_and(|w| !w.eq_ignore_ascii_case(&ch)) && s.session.learn_symbol(sym, &ch.to_string(), &s.doc.strokes) {
+                        learned += 1;
+                    }
+                }
+                if learned > 0 {
+                    s.set_status(format!("Learned {learned} letter{} of your handwriting", if learned == 1 { "" } else { "s" }));
+                }
                 s.dirty |= dirty::STRIP;
             }
             return;

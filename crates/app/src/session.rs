@@ -116,6 +116,21 @@ impl Session {
         true
     }
 
+    /// Save the strokes of symbol `i` as a personal sample of `label` (a correction made elsewhere, such as
+    /// picking a different word). Returns false if the recognizer does not know that label.
+    pub fn learn_symbol(&mut self, i: usize, label: &str, all: &[Stroke]) -> bool {
+        let Some(ids) = self.symbols.get(i).map(|s| s.stroke_ids.clone()) else { return false };
+        let strokes: Vec<&Stroke> = all.iter().filter(|s| ids.contains(&s.id)).collect();
+        let Ok(rec) = self.ensure() else { return false };
+        if !rec.cnn.labels().iter().any(|l| l == label) {
+            return false;
+        }
+        rec.learn(label, &strokes);
+        self.symbols[i].label = label.to_string();
+        self.save();
+        true
+    }
+
     /// Training mode: store every symbol currently on the canvas as a sample of `label`.
     /// Returns the stroke ids consumed so the caller can clear them.
     pub fn train(&mut self, label: &str, all: &[Stroke]) -> Result<Vec<u64>, String> {
@@ -202,6 +217,17 @@ mod tests {
         }
         s.recognize(&strokes).unwrap();
         assert_eq!(s.symbols[0].cands[0].label, target, "{:?}", s.symbols[0].cands);
+    }
+
+    #[test]
+    fn a_word_correction_teaches_the_letter() {
+        let mut s = Session::new(None);
+        let strokes = plus();
+        s.recognize(&strokes).unwrap();
+        assert!(s.learn_symbol(0, "t", &strokes));
+        assert_eq!(s.personal_count("t"), 1);
+        assert!(!s.learn_symbol(0, "no such label", &strokes));
+        assert!(!s.learn_symbol(9, "t", &strokes));
     }
 
     #[test]

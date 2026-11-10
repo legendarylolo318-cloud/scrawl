@@ -27,6 +27,11 @@
   (As words / As math on the chip to override).
 - Find (Ctrl+F) and Replace (Ctrl+H) on the page.
 
+### Text recognition (after 1.1.0)
+- The dot of a handwritten i or j is joined to its stem instead of read as a separate full stop.
+- More letter guesses per symbol and a wider dictionary search when reading words.
+- Picking a different word on the suggestion chip teaches Scrawl the letters that changed.
+
 ### Fixed
 - Undo now undoes whatever changed last, text or ink.
 - Empty callout boxes are kept when old pages are converted.

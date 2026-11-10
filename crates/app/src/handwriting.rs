@@ -60,7 +60,7 @@ fn options(s: &SymbolRec) -> Vec<(char, f32)> {
         }
     }
     v.sort_by(|a, b| b.1.total_cmp(&a.1));
-    v.truncate(3);
+    v.truncate(4);
     v
 }
 
@@ -83,7 +83,7 @@ fn word_options(opts: &[Vec<(char, f32)>], speller: Option<&Speller>) -> Vec<Str
             }
         }
         next.sort_by(|a, b| b.1.total_cmp(&a.1));
-        next.truncate(64);
+        next.truncate(256);
         beam = next;
     }
     let mut out: Vec<String> = Vec::new();
@@ -148,36 +148,10 @@ pub fn to_text_alts(symbols: &[SymbolRec], speller: Option<&Speller>) -> (String
     if symbols.is_empty() {
         return (String::new(), vec![]);
     }
-    let mut heights: Vec<f32> = symbols.iter().map(|s| s.rect.height().max(4.0)).collect();
-    heights.sort_by(f32::total_cmp);
-    let h = heights[heights.len() / 2];
-    // lines: by vertical centre
-    let mut idx: Vec<usize> = (0..symbols.len()).collect();
-    idx.sort_by(|&a, &b| ((symbols[a].rect.y0 + symbols[a].rect.y1) / 2.0).total_cmp(&((symbols[b].rect.y0 + symbols[b].rect.y1) / 2.0)));
-    let mut lines: Vec<Vec<usize>> = Vec::new();
-    for i in idx {
-        let cy = (symbols[i].rect.y0 + symbols[i].rect.y1) / 2.0;
-        match lines.last_mut() {
-            Some(l) if (cy - l.iter().map(|&j| (symbols[j].rect.y0 + symbols[j].rect.y1) / 2.0).sum::<f32>() / l.len() as f32).abs() < h * 0.9 => l.push(i),
-            _ => lines.push(vec![i]),
-        }
-    }
+    let lay = word_layout(symbols);
     let mut line_words: Vec<Vec<Vec<String>>> = Vec::new();
-    for mut line in lines {
-        line.sort_by(|&a, &b| symbols[a].rect.x0.total_cmp(&symbols[b].rect.x0));
-        let mut words: Vec<Vec<Vec<(char, f32)>>> = vec![vec![]];
-        let mut last_x1: Option<f32> = None;
-        for &i in &line {
-            let r = symbols[i].rect;
-            if let Some(x1) = last_x1 {
-                if r.x0 - x1 > h * 0.55 {
-                    words.push(vec![]);
-                }
-            }
-            last_x1 = Some(last_x1.map_or(r.x1, |x| x.max(r.x1)));
-            words.last_mut().unwrap().push(options(&symbols[i]));
-        }
-        let ranked: Vec<Vec<String>> = words.iter().filter(|w| !w.is_empty()).map(|w| word_options(w, speller)).collect();
+    for line in &lay.lines {
+        let ranked: Vec<Vec<String>> = line.iter().map(|w| word_options(&w.iter().map(|&i| letter_options(&symbols[i], lay.dotted.contains(&i))).collect::<Vec<_>>(), speller)).collect();
         line_words.push(ranked);
     }
     let render = |pick: &dyn Fn(usize, usize) -> usize| -> String {
@@ -197,6 +171,101 @@ pub fn to_text_alts(symbols: &[SymbolRec], speller: Option<&Speller>) -> (String
     }
     alts.truncate(5);
     (best, alts)
+}
+
+/// Symbols in reading order: lines of words of symbol indices. Small dots written just above another
+/// symbol (the dot of an i or j) are folded into it and listed in `dotted`.
+pub struct WordLayout {
+    pub lines: Vec<Vec<Vec<usize>>>,
+    pub dotted: Vec<usize>,
+}
+
+pub fn word_layout(symbols: &[SymbolRec]) -> WordLayout {
+    let mut lay = WordLayout { lines: vec![], dotted: vec![] };
+    if symbols.is_empty() {
+        return lay;
+    }
+    let mut heights: Vec<f32> = symbols.iter().map(|s| s.rect.height().max(4.0)).collect();
+    heights.sort_by(f32::total_cmp);
+    let h = heights[heights.len() / 2];
+    // dots of i and j: tiny, just above a taller symbol that they sit over
+    let mut is_dot = vec![false; symbols.len()];
+    for (d, s) in symbols.iter().enumerate() {
+        let small = s.rect.width() < h * 0.35 && s.rect.height() < h * 0.35;
+        if !small {
+            continue;
+        }
+        let cx = (s.rect.x0 + s.rect.x1) / 2.0;
+        let base = symbols.iter().enumerate().filter(|&(b, t)| {
+            b != d && t.rect.height() > s.rect.height() * 1.8 && cx >= t.rect.x0 - h * 0.25 && cx <= t.rect.x1 + h * 0.25 && s.rect.y1 <= t.rect.y0 + h * 0.2 && s.rect.y0 >= t.rect.y0 - h * 0.9
+        }).min_by(|a, b| (a.1.rect.y0 - s.rect.y1).abs().total_cmp(&(b.1.rect.y0 - s.rect.y1).abs()));
+        if let Some((b, _)) = base {
+            is_dot[d] = true;
+            lay.dotted.push(b);
+        }
+    }
+    // lines: by vertical centre
+    let mut idx: Vec<usize> = (0..symbols.len()).filter(|&i| !is_dot[i]).collect();
+    let cy = |i: usize| (symbols[i].rect.y0 + symbols[i].rect.y1) / 2.0;
+    idx.sort_by(|&a, &b| cy(a).total_cmp(&cy(b)));
+    let mut lines: Vec<Vec<usize>> = Vec::new();
+    for i in idx {
+        match lines.last_mut() {
+            Some(l) if (cy(i) - l.iter().map(|&j| cy(j)).sum::<f32>() / l.len() as f32).abs() < h * 0.9 => l.push(i),
+            _ => lines.push(vec![i]),
+        }
+    }
+    for mut line in lines {
+        line.sort_by(|&a, &b| symbols[a].rect.x0.total_cmp(&symbols[b].rect.x0));
+        let mut words: Vec<Vec<usize>> = vec![vec![]];
+        let mut last_x1: Option<f32> = None;
+        for &i in &line {
+            let r = symbols[i].rect;
+            if let Some(x1) = last_x1 {
+                if r.x0 - x1 > h * 0.55 {
+                    words.push(vec![]);
+                }
+            }
+            last_x1 = Some(last_x1.map_or(r.x1, |x| x.max(r.x1)));
+            words.last_mut().unwrap().push(i);
+        }
+        words.retain(|w| !w.is_empty());
+        lay.lines.push(words);
+    }
+    lay
+}
+
+/// Letter options for one symbol; a dot above makes it an i (or a j when that was a guess).
+fn letter_options(s: &SymbolRec, dotted: bool) -> Vec<(char, f32)> {
+    let base = options(s);
+    if !dotted {
+        return base;
+    }
+    let j = base.iter().any(|(c, _)| c.eq_ignore_ascii_case(&'j'));
+    let mut v = if j { vec![('j', 0.6), ('i', 0.35)] } else { vec![('i', 0.8), ('j', 0.1)] };
+    v.extend(base.into_iter().filter(|(c, _)| !c.eq_ignore_ascii_case(&'i') && !c.eq_ignore_ascii_case(&'j')).map(|(c, p)| (c, p * 0.1)));
+    v.truncate(4);
+    v
+}
+
+/// Which symbol each letter of a chosen reading belongs to, for words whose length matches the ink.
+/// Used to learn from corrections.
+pub fn letters_for(symbols: &[SymbolRec], text: &str) -> Vec<(usize, char)> {
+    let lay = word_layout(symbols);
+    let mut out = Vec::new();
+    for (line, tl) in lay.lines.iter().zip(text.split('\n')) {
+        for (word, tw) in line.iter().zip(tl.split_whitespace()) {
+            if word.len() == tw.chars().count() {
+                out.extend(word.iter().copied().zip(tw.chars()));
+            }
+        }
+    }
+    out
+}
+
+/// The letter a symbol currently reads as in text (its best text option).
+pub fn reads_as(s: &SymbolRec) -> Option<char> {
+    options(s).first().map(|o| o.0)
 }
 
 #[cfg(test)]
@@ -250,6 +319,26 @@ mod tests {
         let (best, alts) = to_text_alts(&s, Speller::new().as_ref());
         assert_eq!(best, "cat");
         assert!(alts.contains(&"eat".to_string()), "{alts:?}");
+    }
+
+    #[test]
+    fn the_dot_of_an_i_joins_its_stem() {
+        // "hi": h, a stem the recognizer reads as l or 1, and a separate dot above the stem
+        let h = sym(0.0, &[("h", 0.9)]);
+        let stem = sym(24.0, &[("l", 0.6), ("1", 0.3)]);
+        let mut dot = sym(30.0, &[(".", 0.9)]);
+        dot.rect = ink::Rect { x0: 31.0, y0: -10.0, x1: 35.0, y1: -6.0 };
+        let s = vec![h, stem, dot];
+        let (best, _) = to_text_alts(&s, Speller::new().as_ref());
+        assert_eq!(best, "hi");
+        assert_eq!(letters_for(&s, "hi"), vec![(0, 'h'), (1, 'i')]);
+    }
+
+    #[test]
+    fn letters_map_back_to_symbols_only_when_lengths_match() {
+        let s = vec![sym(0.0, &[("c", 0.9)]), sym(24.0, &[("a", 0.9)]), sym(48.0, &[("t", 0.9)]), sym(120.0, &[("o", 0.9)]), sym(144.0, &[("k", 0.9)])];
+        assert_eq!(letters_for(&s, "eat ok"), vec![(0, 'e'), (1, 'a'), (2, 't'), (3, 'o'), (4, 'k')]);
+        assert_eq!(letters_for(&s, "cart ok"), vec![(3, 'o'), (4, 'k')], "a word that changed length teaches nothing");
     }
 
     #[test]
