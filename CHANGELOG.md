@@ -1,6 +1,6 @@
 # Changelog
 
-## UI redesign (unreleased)
+## 1.1.0 (2026-11-10): one calm page for typing and handwriting
 
 ### Changed
 - **One page that types like a word processor and takes ink.** The side "Page" panel, the typed-text box and
@@ -23,6 +23,14 @@
 - Checklists, outline of headings, word count, today's note, quick note, welcome page for new users,
   selected-object bar for images/plots/math (smaller, larger, trim, copy LaTeX, delete).
 - Set `SCRAWL_OLD_EDITOR=1` to start with the previous layout (temporary).
+- Handwriting suggestions offer whole-word alternatives in Words mode, and an Auto mode tells words from math
+  (As words / As math on the chip to override).
+- Find (Ctrl+F) and Replace (Ctrl+H) on the page.
+
+### Fixed
+- Undo now undoes whatever changed last, text or ink.
+- Empty callout boxes are kept when old pages are converted.
+- Export, print and search always include the latest typed text.
 
 ## Unreleased (0.1.0 in progress)
 

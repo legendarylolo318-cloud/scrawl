@@ -3943,7 +3943,7 @@ dependencies = [
 
 [[package]]
 name = "docview"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "cosmic-text",
  "notedoc",
@@ -4373,7 +4373,7 @@ dependencies = [
 
 [[package]]
 name = "export"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "base64 0.23.1",
  "ink",
@@ -6713,7 +6713,7 @@ checksum = "a257582fdcde896fd96463bf2d40eefea0580021c0712a0e2b028b60b47a837a"
 
 [[package]]
 name = "ink"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "serde",
 ]
@@ -6753,7 +6753,7 @@ dependencies = [
 
 [[package]]
 name = "input"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "layout",
  "serde",
@@ -7171,7 +7171,7 @@ checksum = "bf36173d4167ed999940f804952e6b08197cae5ad5d572eb4db150ce8ad5d58f"
 
 [[package]]
 name = "layout"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "ink",
  "serde",
@@ -7692,7 +7692,7 @@ dependencies = [
 
 [[package]]
 name = "media"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "cpal",
  "hayro 0.9.0",
@@ -8120,7 +8120,7 @@ checksum = "0676bb32a98c1a483ce53e500a81ad9c3d5b3f7c920c28c24e9cb0980d0b5bc8"
 
 [[package]]
 name = "notedoc"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "layout",
  "serde",
@@ -10216,7 +10216,7 @@ checksum = "dc3f51d3a1399f13fa081d97345d0fdf08597fe78558fc8539d0e67412f83b26"
 
 [[package]]
 name = "recog"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "ink",
  "serde",
@@ -10305,7 +10305,7 @@ checksum = "ba39f3699c378cd8970968dcbff9c43159ea4cfbd88d43c00b22f2ef10a435d2"
 
 [[package]]
 name = "remote"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "axum",
  "base64 0.23.1",
@@ -10333,7 +10333,7 @@ dependencies = [
 
 [[package]]
 name = "render"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "layout",
  "typst",
@@ -10828,7 +10828,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "scrawl"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "arboard",
  "base64 0.23.1",
@@ -10836,7 +10836,7 @@ dependencies = [
  "export",
  "image",
  "ink",
- "input 1.0.0",
+ "input 1.1.0",
  "layout",
  "media",
  "notedoc",
@@ -10856,7 +10856,7 @@ dependencies = [
 
 [[package]]
 name = "scrawl-train"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "ab_glyph",
  "anyhow",
@@ -10899,7 +10899,7 @@ dependencies = [
 
 [[package]]
 name = "search"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "layout",
  "store",
@@ -11637,7 +11637,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "store"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "age",
  "ink",
