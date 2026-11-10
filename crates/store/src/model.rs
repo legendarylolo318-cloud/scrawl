@@ -71,6 +71,12 @@ pub struct Page {
     /// Audio recorded while writing, with stroke-id -> offset marks for playback sync.
     #[serde(default)]
     pub audio: Option<AudioClip>,
+    /// Text typed straight onto the canvas with the Text tool.
+    #[serde(default)]
+    pub texts: Vec<CanvasText>,
+    /// Ink mode the page opens in: "math", "text" or "drawing" (None = math).
+    #[serde(default)]
+    pub ink_mode: Option<String>,
     pub modified_ms: u64,
 }
 
@@ -90,6 +96,8 @@ impl Page {
             blocks: vec![],
             pdf_background: None,
             audio: None,
+            texts: vec![],
+            ink_mode: None,
             modified_ms: 0,
         }
     }
@@ -319,5 +327,25 @@ mod escape_tests {
         let h = p.header_typst();
         assert!(h.contains("\\#read"), "{h}");
         assert!(h.contains("\\$x\\$") && h.contains("\\/\\/"), "{h}");
+    }
+}
+
+/// A piece of typed text placed on the canvas (page coordinates, size in page units).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CanvasText {
+    pub id: u64,
+    pub x: f32,
+    pub y: f32,
+    pub text: String,
+    pub size: f32,
+    pub color: [u8; 4],
+}
+
+impl CanvasText {
+    /// Rough bounding box (x0, y0, x1, y1) for hit tests; good enough for picking and erasing.
+    pub fn bbox(&self) -> (f32, f32, f32, f32) {
+        let lines: Vec<&str> = self.text.lines().collect();
+        let longest = lines.iter().map(|l| l.chars().count()).max().unwrap_or(1).max(1) as f32;
+        (self.x, self.y, self.x + longest * self.size * 0.55, self.y + lines.len().max(1) as f32 * self.size * 1.3)
     }
 }

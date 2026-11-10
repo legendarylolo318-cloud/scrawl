@@ -224,6 +224,10 @@ pub struct Background {
 /// Overlays drawn on top of the ink (never cached).
 #[derive(Default)]
 pub struct Overlay<'a> {
+    /// Typed canvas text: (page x, page y, rendered pixmap). Part of the cached layer.
+    pub texts: &'a [(f32, f32, std::sync::Arc<Pixmap>)],
+    /// Changes whenever `texts` changes (content, position or zoom).
+    pub texts_key: u64,
     pub lasso: &'a [(f32, f32)],
     pub selection: Option<ink::Rect>,
     pub light: bool,
@@ -272,7 +276,7 @@ impl Canvas {
         overlay: &Overlay,
     ) -> Image {
         let (w, h) = (w.max(1), h.max(1));
-        let extra = page.map_or(0, |(a, b)| (a as u64) << 32 | b as u64) ^ background.map_or(0, |b| b.pm.width() as u64 * 7919 + b.pm.height() as u64) ^ overlay.light as u64;
+        let extra = page.map_or(0, |(a, b)| (a as u64) << 32 | b as u64) ^ background.map_or(0, |b| b.pm.width() as u64 * 7919 + b.pm.height() as u64) ^ overlay.light as u64 ^ overlay.texts_key.rotate_left(17);
         let key = fingerprint(strokes, view, w, h, px_scale, bg, paper, extra);
         if self.key != key || self.base.is_none() {
             self.base = Pixmap::new(w, h).map(|mut pm| {
@@ -291,6 +295,10 @@ impl Canvas {
                 }
                 for s in strokes.iter().filter(|s| s.kind == PenKind::Pen) {
                     draw_stroke(&mut pm, s, view, px_scale, overlay.light);
+                }
+                for (x, y, tp) in overlay.texts {
+                    let (sx, sy) = ((x * view.scale + view.ox) * px_scale, (y * view.scale + view.oy) * px_scale);
+                    pm.draw_pixmap(sx as i32, sy as i32, tp.as_ref().as_ref(), &tiny_skia::PixmapPaint::default(), Transform::identity(), None);
                 }
                 pm
             });

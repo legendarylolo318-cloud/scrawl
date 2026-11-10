@@ -43,6 +43,7 @@ pub fn doc_from_page(notebook_id: &str, p: &Page, pdf_text: &str) -> PageDoc {
             _ => {}
         }
     }
+    body.extend(p.texts.iter().map(|t| t.text.clone()));
     PageDoc {
         notebook_id: notebook_id.into(),
         page_id: p.id.clone(),

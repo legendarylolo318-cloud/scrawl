@@ -3,6 +3,7 @@
 mod actions;
 mod commands;
 mod graphview;
+mod handwriting;
 mod headless;
 mod pagedoc;
 mod raster;
@@ -38,6 +39,7 @@ pub enum Tool {
     Highlighter,
     Eraser,
     Lasso,
+    TextBox,
 }
 
 /// What a text prompt overlay is asking for.
@@ -124,6 +126,16 @@ pub struct State {
     pub last_backup_check: u64,
     pub last_disk_check: u64,
     pub status: String,
+    /// Text ink mode: handwriting becomes words instead of math.
+    pub text_mode: bool,
+    pub text_result: String,
+    /// Canvas text being typed: (existing text id or None, page x, page y).
+    pub textbox: Option<(Option<u64>, f32, f32)>,
+    pub text_cache: std::collections::HashMap<String, Arc<tiny_skia::Pixmap>>,
+    /// Snapshots of the canvas texts before each change, for Undo.
+    pub text_history: Vec<Vec<store::CanvasText>>,
+    pub last_was_text: bool,
+    pub text_redo: Vec<Vec<store::CanvasText>>,
 }
 
 impl State {
@@ -186,6 +198,13 @@ impl State {
             last_backup_check: 0,
             last_disk_check: 0,
             status: String::new(),
+            text_mode: false,
+            text_result: String::new(),
+            textbox: None,
+            text_cache: Default::default(),
+            text_history: Vec::new(),
+            last_was_text: false,
+            text_redo: Vec::new(),
             settings,
         };
         st.width_from_pen(0);
@@ -235,6 +254,21 @@ impl State {
             self.paper.kind = paper_kind(&ws.page.paper.kind);
             self.paper.spacing = ws.page.paper.spacing;
             self.background = ws.page.pdf_background.as_ref().and_then(|name| ws.media(name)).and_then(|png| decode_background(&png));
+            // each page remembers its ink mode (the "notes" template opens in Text mode)
+            match ws.page.ink_mode.as_deref() {
+                Some("text") => {
+                    self.mode = InkMode::MathText;
+                    self.text_mode = true;
+                }
+                Some("drawing") => {
+                    self.mode = InkMode::Drawing;
+                    self.text_mode = false;
+                }
+                _ => {
+                    self.mode = InkMode::MathText;
+                    self.text_mode = false;
+                }
+            }
             if !self.tabs.contains(&ws.page.id) {
                 self.tabs.push(ws.page.id.clone());
                 if self.tabs.len() > 12 {
@@ -250,11 +284,18 @@ impl State {
         self.selection.clear();
         self.lasso.clear();
         self.editing = None;
+        self.text_result.clear();
+        self.textbox = None;
+        self.text_history.clear();
+        self.last_was_text = false;
+        self.text_redo.clear();
         self.dirty = dirty::ALL;
     }
 
     /// Push canvas ink and paper into the workspace (autosave picks it up).
     pub fn sync_ws(&mut self) {
+        self.last_was_text = false;
+        self.text_redo.clear();
         let now = self.now_ms();
         let (strokes, kind, spacing) = (self.doc.strokes.clone(), self.paper.kind.name().to_lowercase(), self.paper.spacing);
         if let Some(ws) = &mut self.ws {
@@ -372,7 +413,9 @@ fn refresh_canvas(ui: &MainWindow, st: &mut State) {
         ink::bbox(&pts)
     };
     let light = st.light();
-    let ov = Overlay { lasso: &st.lasso, selection: sel, light };
+    let texts = canvas_texts(st, scale);
+    let texts_key = { use std::hash::{Hash, Hasher}; let mut h = std::collections::hash_map::DefaultHasher::new(); for (x, y, p) in &texts { (x.to_bits(), y.to_bits(), Arc::as_ptr(p) as usize).hash(&mut h); } h.finish() };
+    let ov = Overlay { lasso: &st.lasso, selection: sel, light, texts: &texts, texts_key };
     let mut paper = st.paper;
     if light && paper.color[..3] == [0x41, 0x48, 0x68] {
         paper.color = [0xc4, 0xc9, 0xd9, 0xff];
@@ -495,8 +538,19 @@ fn refresh_tabs(ui: &MainWindow, st: &mut State) {
 }
 
 fn refresh_tools(ui: &MainWindow, st: &State) {
-    ui.set_tool(match st.tool { Tool::Pen => "pen", Tool::Highlighter => "highlighter", Tool::Eraser => "eraser", Tool::Lasso => "lasso" }.into());
-    ui.set_mode(if st.mode == InkMode::Drawing { "drawing" } else { "math" }.into());
+    ui.set_tool(match st.tool { Tool::Pen => "pen", Tool::Highlighter => "highlighter", Tool::Eraser => "eraser", Tool::Lasso => "lasso", Tool::TextBox => "textbox" }.into());
+    ui.set_mode(if st.mode == InkMode::Drawing { "drawing" } else if st.text_mode { "text" } else { "math" }.into());
+    match st.textbox {
+        Some((id, x, y)) => {
+            let (sx, sy) = (x * st.view.scale + st.view.ox, y * st.view.scale + st.view.oy);
+            let initial = id.and_then(|i| st.ws.as_ref().and_then(|w| w.page.texts.iter().find(|t| t.id == i).map(|t| t.text.clone()))).unwrap_or_default();
+            ui.set_textbox_x(sx);
+            ui.set_textbox_y(sy - 8.0);
+            ui.set_textbox_initial(initial.into());
+            ui.set_textbox_visible(true);
+        }
+        None => ui.set_textbox_visible(false),
+    }
     ui.set_pixel_erase(st.eraser_mode == EraserMode::Pixel);
     ui.set_smoothing(st.settings.smoothing);
     ui.set_stroke_width(st.settings.width);
@@ -567,6 +621,12 @@ pub fn current_expr(st: &State) -> layout::Expr {
 
 /// The expression line: Typst text plus a Typst-rendered image, and autocomplete suggestions.
 pub fn update_expr(ui: &MainWindow, st: &State) {
+    if st.text_mode && !st.typing {
+        ui.set_suggestions(model(vec![]));
+        ui.set_has_expr_image(false);
+        ui.set_expr_text(if st.text_result.is_empty() { "".into() } else { format!("“{}”  (Insert ↵ adds it to the page)", st.text_result.replace('\n', " / ")).into() });
+        return;
+    }
     let sugg: Vec<ItemRow> = if st.typing && !st.editor.pending_word().is_empty() {
         st.editor.suggestions(6).into_iter().map(|s| ItemRow { id: s.name.as_str().into(), title: s.name.as_str().into(), detail: s.preview.as_str().into() }).collect()
     } else {
@@ -638,7 +698,14 @@ pub fn run_recognition(ui: &MainWindow, st: &mut State) {
             if st.session.symbols.is_empty() && st.doc.strokes.iter().any(|s| s.mode == InkMode::MathText) {
                 st.set_status("Nothing to recognize");
             }
-            feed_editor(st);
+            if st.text_mode {
+                if st.speller.is_none() {
+                    st.speller = pagedoc::Speller::new();
+                }
+                st.text_result = handwriting::to_text(&st.session.symbols, st.speller.as_ref());
+            } else {
+                feed_editor(st);
+            }
         }
         Err(e) => st.set_status(format!("Recognizer failed to load: {e}")),
     }
@@ -753,8 +820,7 @@ fn main() -> Result<(), slint::PlatformError> {
     }));
     ui.on_set_tool(with!(|_ui, s, t = SharedString| actions::set_tool(s, &t)));
     ui.on_set_mode(with!(|_ui, s, m = SharedString| {
-        s.mode = if m == "drawing" { InkMode::Drawing } else { InkMode::MathText };
-        s.dirty |= dirty::TOOLS;
+        actions::set_mode(s, &m);
     }));
     ui.on_toggle_pixel_erase(with!(|_ui, s| {
         s.eraser_mode = if s.eraser_mode == EraserMode::Stroke { EraserMode::Pixel } else { EraserMode::Stroke };
@@ -822,6 +888,9 @@ fn main() -> Result<(), slint::PlatformError> {
                 s.editor.set_expr(s.session.expression());
             }
             s.dirty |= dirty::STRIP;
+            if s.text_mode {
+                s.text_result = handwriting::to_text(&s.session.symbols, s.speller.as_ref());
+            }
             s.set_status("Correction saved to your handwriting profile");
             tablet::push_state(s);
         }
@@ -1114,7 +1183,13 @@ fn main() -> Result<(), slint::PlatformError> {
     let timer = Rc::new(slint::Timer::default());
     {
         let (st2, weak2, timer2) = (st.clone(), weak.clone(), timer.clone());
-        ui.on_pen_lifted(move || {
+        ui.on_textbox_commit(with!(|ui, s, t = SharedString| actions::textbox_commit(s, &t)));
+    ui.on_textbox_cancel(with!(|ui, s| {
+        s.textbox = None;
+        s.dirty |= dirty::TOOLS;
+        ui.invoke_focus_canvas();
+    }));
+    ui.on_pen_lifted(move || {
             let (st3, weak3) = (st2.clone(), weak2.clone());
             // Undo/redo/delete call this while State is already borrowed: never borrow again here.
             let delay = st2.try_borrow().map(|s| s.settings.recog_delay_ms).unwrap_or_else(|_| Settings::load().recog_delay_ms);
@@ -1262,6 +1337,26 @@ fn run_scene(ui: &MainWindow, st: &Rc<RefCell<State>>, scene: &str) {
                 ui.invoke_new_page("problem set".into());
                 ui.invoke_new_page("cornell notes".into());
             }
+            "typehere" => {
+                ui.invoke_new_page("notes".into());
+                ui.invoke_set_tool("textbox".into());
+                ui.invoke_pointer_down(120.0, 80.0);
+                ui.invoke_pointer_up();
+                ui.invoke_textbox_commit("Typed straight onto the page".into());
+                ui.invoke_pointer_down(120.0, 160.0);
+                ui.invoke_pointer_up();
+                ui.invoke_textbox_commit("Second note: buy brandy".into());
+                ui.invoke_pointer_down(130.0, 90.0);
+                ui.invoke_pointer_up();
+                ui.invoke_run_command("undo".into());
+                ui.invoke_run_command("redo".into());
+                ui.invoke_set_tool("pen".into());
+                // handwriting in Text mode (the notes template opens in it): a tall l, then an o
+                draw(&line((140.0, 300.0), (140.0, 360.0)));
+                let o: Vec<(f32, f32)> = (0..=30).map(|i| { let a = i as f32 / 30.0 * std::f32::consts::TAU; (175.0 + 14.0 * a.cos(), 346.0 + 14.0 * a.sin()) }).collect();
+                draw(&o);
+                ui.invoke_run_command("recognize".into());
+            }
             "palette" => ui.invoke_run_command("palette".into()),
             "pick" => {
                 ui.invoke_run_command("palette".into());
@@ -1284,4 +1379,36 @@ fn run_scene(ui: &MainWindow, st: &Rc<RefCell<State>>, scene: &str) {
         }
     }
     let _ = st;
+}
+
+/// Typeset each canvas text at the current zoom (cached by content, colour and size on screen).
+fn canvas_texts(st: &mut State, px_scale: f32) -> Vec<(f32, f32, Arc<tiny_skia::Pixmap>)> {
+    let Some(ws) = &st.ws else { return vec![] };
+    let light = !st.settings.colors().is_dark();
+    let mut out = Vec::new();
+    for t in &ws.page.texts {
+        let [r, g, b, _] = t.color;
+        // same rule as ink: near-white text is shown dark on light paper
+        let (r, g, b) = if light && r > 200 && g > 200 && b > 200 { (0x1f, 0x23, 0x35) } else { (r, g, b) };
+        let px_per_pt = t.size * st.view.scale * px_scale / 11.0;
+        let key = format!("{}\u{0}{r},{g},{b}\u{0}{:.3}", t.text, px_per_pt);
+        if !st.text_cache.contains_key(&key) {
+            let body: Vec<String> = t.text.lines().map(store::typst_escape).collect();
+            let src = format!("#set page(width: auto, height: auto, margin: 1pt, fill: none)\n#set text(size: 11pt, fill: rgb({r}, {g}, {b}))\n{}\n", body.join(" \\\n"));
+            let pm = render::compile(&src, &[])
+                .ok()
+                .and_then(|d| render::png(&d, 0, px_per_pt.clamp(0.2, 40.0)))
+                .and_then(|png| tiny_skia::Pixmap::decode_png(&png).ok());
+            if let Some(pm) = pm {
+                if st.text_cache.len() > 400 {
+                    st.text_cache.clear();
+                }
+                st.text_cache.insert(key.clone(), Arc::new(pm));
+            }
+        }
+        if let Some(pm) = st.text_cache.get(&key) {
+            out.push((t.x, t.y, pm.clone()));
+        }
+    }
+    out
 }

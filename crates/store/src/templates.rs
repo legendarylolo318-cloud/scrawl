@@ -1,6 +1,6 @@
 use crate::model::*;
 
-pub const BUILTIN: [&str; 6] = ["blank", "lecture notes", "cornell notes", "problem set", "lab report", "formula sheet"];
+pub const BUILTIN: [&str; 7] = ["blank", "notes", "lecture notes", "cornell notes", "problem set", "lab report", "formula sheet"];
 
 fn text(m: &str) -> Block {
     Block::Text { markup: m.into() }
@@ -13,6 +13,11 @@ pub fn builtin(name: &str, id: &str, date: &str, problems: usize) -> Option<Page
         "blank" => {
             p.title = "Untitled".into();
             p.paper.kind = "blank".into();
+        }
+        "notes" => {
+            // plain notes: handwriting becomes words, typing goes straight onto the page
+            p.title = "Notes".into();
+            p.ink_mode = Some("text".into());
         }
         "lecture notes" => {
             p.title = "Lecture".into();

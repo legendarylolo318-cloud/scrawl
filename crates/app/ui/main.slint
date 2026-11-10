@@ -227,6 +227,10 @@ export component MainWindow inherits Window {
     in property <bool> recording: false;
     in property <bool> has-audio: false;
     in property <bool> snap-shapes: true;
+    in property <bool> textbox-visible: false;
+    in property <length> textbox-x;
+    in property <length> textbox-y;
+    in property <string> textbox-initial;
     // ---- notes
     in property <[PageRow]> pages;
     in property <[PageRow]> search-results;
@@ -316,6 +320,8 @@ export component MainWindow inherits Window {
     callback use-pen(int);
     callback save-pen(int);
     callback pen-lifted();
+    callback textbox-commit(string);
+    callback textbox-cancel();
     callback set-delay(float);
     callback choose(int);
     callback set-spacing(float);
@@ -431,10 +437,12 @@ export component MainWindow inherits Window {
                     ToolButton { label: "Highlight"; active: root.tool == "highlighter"; clicked => { root.set-tool("highlighter"); } }
                     ToolButton { label: "Eraser"; active: root.tool == "eraser"; clicked => { root.set-tool("eraser"); } }
                     if root.tool == "eraser" : ToolButton { label: root.pixel-erase ? "Erase: part" : "Erase: stroke"; clicked => { root.toggle-pixel-erase(); } }
+                    ToolButton { label: "Type here"; active: root.tool == "textbox"; tip: "Click on the page and type; click typed text to edit it"; clicked => { root.set-tool("textbox"); } }
                     ToolButton { label: "Lasso"; active: root.tool == "lasso"; tip: "Lasso: circle ink to select, then drag it to move"; clicked => { root.set-tool("lasso"); } }
                     if root.has-selection : ToolButton { label: "Delete sel."; urgent: true; clicked => { root.run-command("delete-selection"); } }
                     Rectangle { width: 6px; }
-                    ToolButton { label: "Math/Text"; active: root.mode == "math"; clicked => { root.set-mode("math"); } }
+                    ToolButton { label: "Math"; active: root.mode == "math"; tip: "Math mode: handwriting becomes typeset math"; clicked => { root.set-mode("math"); } }
+                    ToolButton { label: "Text"; active: root.mode == "text"; tip: "Text mode: handwriting becomes words (print letters separately)"; clicked => { root.set-mode("text"); } }
                     ToolButton { label: "Drawing"; active: root.mode == "drawing"; clicked => { root.set-mode("drawing"); } }
                     Rectangle { width: 6px; }
                     ToolButton { label: "Undo"; enabled: root.can-undo; clicked => { root.run-command("undo"); } }
@@ -643,7 +651,7 @@ export component MainWindow inherits Window {
                     init => { root.canvas-resized(self.width, self.height); }
                     Image { source: root.frame; width: parent.width; height: parent.height; image-fit: fill; accessible-role: image; accessible-label: "Ink canvas"; }
                     TouchArea {
-                        mouse-cursor: root.tool == "lasso" ? move : crosshair;
+                        mouse-cursor: root.tool == "lasso" ? move : root.tool == "textbox" ? text : crosshair;
                         pointer-event(e) => {
                             if e.kind == PointerEventKind.down {
                                 if e.button == PointerEventButton.left { root.pointer-down(self.mouse-x, self.mouse-y); fs.focus(); }
@@ -656,6 +664,25 @@ export component MainWindow inherits Window {
                             if e.modifiers.control { root.zoom(e.delta-y > 0 ? 1.1 : 1 / 1.1, self.mouse-x, self.mouse-y); }
                             else { root.pan(e.delta-x, e.delta-y); }
                             accept
+                        }
+                    }
+                    if root.textbox-visible : Rectangle {
+                        x: min(root.textbox-x, parent.width - self.width - 4px);
+                        y: min(root.textbox-y, parent.height - self.height - 4px);
+                        width: min(parent.width - 8px, 420px * Theme.scale);
+                        height: Theme.hit + 8px;
+                        border-radius: 6px; background: Theme.panel; border-width: 2px; border-color: Theme.accent;
+                        HorizontalLayout {
+                            padding: 4px; spacing: 4px;
+                            tb := LineEdit {
+                                height: Theme.hit;
+                                text: root.textbox-initial;
+                                placeholder-text: "Type, then Enter (empty deletes)";
+                                init => { self.focus(); self.select-all(); }
+                                accepted(t) => { root.textbox-commit(t); }
+                            }
+                            ToolButton { label: "✓"; tip: "Place the text"; clicked => { root.textbox-commit(tb.text); } }
+                            ToolButton { label: "✕"; tip: "Cancel"; clicked => { root.textbox-cancel(); } }
                         }
                     }
                     if root.focus-mode || root.present-mode : ToolButton { x: parent.width - self.width - 8px; y: 8px; label: "Exit (Esc)"; clicked => { root.run-command(root.present-mode ? "present" : "focus"); } }
@@ -684,7 +711,7 @@ export component MainWindow inherits Window {
                                 spacing: 4px * Theme.scale;
                                 alignment: start;
                                 if (root.split-active ? root.split-blocks : root.blocks).length == 0 : Text {
-                                    text: "Nothing typeset yet. Write math on the canvas and press Insert ↵, or add text below.";
+                                    text: "Nothing here yet. Write math or words on the canvas and press Insert ↵, type straight onto the page with Type here, or add a text block below.";
                                     color: Theme.muted; wrap: word-wrap; font-size: Theme.fs-small;
                                 }
                                 for b in (root.split-active ? root.split-blocks : root.blocks) : Rectangle {

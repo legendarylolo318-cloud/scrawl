@@ -246,6 +246,18 @@ impl Speller {
         spellbook::Dictionary::new(aff, dic).ok().map(|dict| Self { dict })
     }
 
+    /// Is this a dictionary word?
+    pub fn is_word(&self, w: &str) -> bool {
+        self.dict.check(w)
+    }
+
+    /// Best dictionary suggestion for a misspelled word.
+    pub fn suggest_one(&self, w: &str) -> Option<String> {
+        let mut v = Vec::new();
+        self.dict.suggest(w, &mut v);
+        v.into_iter().next()
+    }
+
     /// Misspelled words with the first suggestion ("" if none). At most `limit` results.
     pub fn check(&self, markup: &str, limit: usize) -> Vec<(String, String)> {
         let mut out: Vec<(String, String)> = Vec::new();

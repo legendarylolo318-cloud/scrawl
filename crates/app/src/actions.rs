@@ -58,8 +58,10 @@ pub fn set_tool(s: &mut State, t: &str) {
         "highlighter" => Tool::Highlighter,
         "eraser" => Tool::Eraser,
         "lasso" => Tool::Lasso,
+        "textbox" => Tool::TextBox,
         _ => Tool::Pen,
     };
+    s.textbox = None;
     if s.tool != Tool::Lasso {
         s.selection.clear();
         s.dirty |= dirty::CANVAS;
@@ -78,6 +80,14 @@ pub fn pointer_down(s: &mut State, x: f32, y: f32) {
     s.t0_ms = s.epoch.elapsed().as_millis() as u64;
     match s.tool {
         Tool::Eraser => s.eraser_path = vec![(px, py)],
+        Tool::TextBox => {
+            let hit = text_at(s, px, py);
+            let (x, y) = hit.and_then(|id| s.ws.as_ref().and_then(|w| w.page.texts.iter().find(|t| t.id == id).map(|t| (t.x, t.y)))).unwrap_or((px, py));
+            s.textbox = Some((hit, x, y));
+            s.down_at = None;
+            s.dirty |= dirty::TOOLS;
+            return;
+        }
         Tool::Lasso => {
             let inside = selection_bbox(s).is_some_and(|r| px >= r.x0 - 8.0 && px <= r.x1 + 8.0 && py >= r.y0 - 8.0 && py <= r.y1 + 8.0);
             if inside {
@@ -135,6 +145,15 @@ pub fn pointer_up(ui: &MainWindow, s: &mut State) -> bool {
             let r = (s.settings.width * 2.0 + 4.0) / s.view.scale;
             let mode = s.eraser_mode;
             s.doc.erase_path(&path, r, mode);
+            // the eraser also removes typed text it passes over
+            let hit: Vec<u64> = path.iter().filter_map(|&(x, y)| text_at(s, x, y)).collect();
+            if !hit.is_empty() {
+                snapshot_texts(s);
+                if let Some(w) = &mut s.ws {
+                    w.page.texts.retain(|t| !hit.contains(&t.id));
+                    w.touch();
+                }
+            }
             s.sync_ws();
             true
         }
@@ -169,6 +188,7 @@ pub fn pointer_up(ui: &MainWindow, s: &mut State) -> bool {
             }
             false
         }
+        Tool::TextBox => false,
         tool => {
             let raw = std::mem::take(&mut s.live);
             if raw.is_empty() {
@@ -312,7 +332,8 @@ pub fn run(ui: &MainWindow, s: &mut State, id: &str) {
             s.settings.theme = id.trim_start_matches("theme-").into();
             theme_changed(ui, s);
         }
-        "pen" | "highlighter" | "eraser" | "lasso" => set_tool(s, id),
+        "pen" | "highlighter" | "eraser" | "lasso" | "textbox" => set_tool(s, id),
+        "mode-text" => set_mode(s, "text"),
         "pen1" | "pen2" | "pen3" => {
             let i = id[3..].parse::<usize>().unwrap_or(1) - 1;
             s.tool = Tool::Pen;
@@ -320,14 +341,10 @@ pub fn run(ui: &MainWindow, s: &mut State, id: &str) {
             s.active_pen = Some(i);
             s.dirty |= dirty::TOOLS;
         }
-        "mode-math" => {
-            s.mode = InkMode::MathText;
-            s.dirty |= dirty::TOOLS;
-        }
-        "mode-drawing" => {
-            s.mode = InkMode::Drawing;
-            s.dirty |= dirty::TOOLS;
-        }
+        "mode-math" => set_mode(s, "math"),
+        "mode-drawing" => set_mode(s, "drawing"),
+        "undo" if undo_text(s) => s.set_status("Undid the typed text change (Redo puts it back)"),
+        "redo" if redo_text(s) => s.set_status("Redid the typed text change"),
         "undo" | "redo" => {
             if s.typing && id == "undo" && !s.editor.expr().is_empty() {
                 s.editor.backspace();
@@ -611,6 +628,10 @@ pub fn clear_expression(s: &mut State) {
 /// Math/Text ink it came from, so the next expression starts fresh.
 pub fn insert_expression(ui: &MainWindow, s: &mut State) {
     run_recognition(ui, s);
+    if s.text_mode {
+        insert_words(s);
+        return;
+    }
     let e = current_expr(s);
     if e.is_empty() {
         s.set_status("Nothing to insert yet: write math on the canvas or press Type");
@@ -1454,4 +1475,132 @@ pub fn housekeeping(ui: &MainWindow, s: &mut State) {
             }
         }
     }
+}
+
+// ---- ink modes and canvas text ------------------------------------------------------------------
+
+/// Math / Text / Drawing. Text and Math both recognize ink; Text turns it into words.
+pub fn set_mode(s: &mut State, m: &str) {
+    s.mode = if m == "drawing" { InkMode::Drawing } else { InkMode::MathText };
+    s.text_mode = m == "text";
+    s.text_result.clear();
+    clear_expression(s);
+    if let Some(w) = &mut s.ws {
+        let want = Some(m.to_string()).filter(|m| m != "math");
+        if w.page.ink_mode != want {
+            w.page.ink_mode = want;
+            w.touch();
+        }
+    }
+    if s.text_mode {
+        s.set_status("Text mode: print letters separately, pause, then Insert ↵ adds the words to the page");
+    }
+    s.dirty |= dirty::TOOLS | dirty::STRIP;
+}
+
+fn text_at(s: &State, px: f32, py: f32) -> Option<u64> {
+    s.ws.as_ref()?.page.texts.iter().rev().find(|t| {
+        let (x0, y0, x1, y1) = t.bbox();
+        px >= x0 - 4.0 && px <= x1 + 4.0 && py >= y0 - 4.0 && py <= y1 + 4.0
+    }).map(|t| t.id)
+}
+
+fn snapshot_texts(s: &mut State) {
+    s.text_redo.clear();
+    if let Some(w) = &s.ws {
+        s.text_history.push(w.page.texts.clone());
+        if s.text_history.len() > 50 {
+            s.text_history.remove(0);
+        }
+    }
+    s.last_was_text = true;
+}
+
+/// Enter in the on-canvas text box: add, change or (when empty) delete the text.
+pub fn textbox_commit(s: &mut State, text: &str) {
+    let Some((id, x, y)) = s.textbox.take() else { return };
+    snapshot_texts(s);
+    let color = s.pen_color();
+    let size = 18.0 / s.view.scale.max(0.1);
+    if let Some(w) = &mut s.ws {
+        let text = text.trim_end().to_string();
+        match id {
+            Some(id) => {
+                if text.is_empty() {
+                    w.page.texts.retain(|t| t.id != id);
+                } else if let Some(t) = w.page.texts.iter_mut().find(|t| t.id == id) {
+                    t.text = text;
+                }
+            }
+            None if !text.is_empty() => {
+                let id = w.page.texts.iter().map(|t| t.id).max().unwrap_or(0) + 1;
+                w.page.texts.push(store::CanvasText { id, x, y, text, size, color });
+            }
+            None => {}
+        }
+        w.touch();
+    }
+    s.dirty |= dirty::CANVAS | dirty::TOOLS;
+}
+
+/// Undo the last canvas-text change if that was the most recent edit.
+pub fn undo_text(s: &mut State) -> bool {
+    if !s.last_was_text {
+        return false;
+    }
+    let Some(prev) = s.text_history.pop() else {
+        s.last_was_text = false;
+        return false;
+    };
+    if let Some(w) = &mut s.ws {
+        s.text_redo.push(std::mem::replace(&mut w.page.texts, prev));
+        w.touch();
+    }
+    if s.text_history.is_empty() {
+        s.last_was_text = false;
+    }
+    s.dirty |= dirty::CANVAS;
+    true
+}
+
+/// Redo a canvas-text change that Undo reverted (until new ink or text edits clear it).
+pub fn redo_text(s: &mut State) -> bool {
+    let Some(next) = s.text_redo.pop() else { return false };
+    if let Some(w) = &mut s.ws {
+        s.text_history.push(std::mem::replace(&mut w.page.texts, next));
+        w.touch();
+    }
+    s.last_was_text = true;
+    s.dirty |= dirty::CANVAS;
+    true
+}
+
+/// Add recognized words to the page: appended to the last text block, or a new one.
+fn insert_words(s: &mut State) {
+    let words = s.text_result.trim().to_string();
+    if words.is_empty() {
+        s.set_status("Nothing recognized yet: write some words and pause");
+        return;
+    }
+    let used: Vec<u64> = s.session.symbols.iter().flat_map(|x| x.stroke_ids.clone()).collect();
+    if let Some(w) = &mut s.ws {
+        match w.page.blocks.last_mut() {
+            Some(store::Block::Text { markup }) if s.editing.is_none() => {
+                if !markup.ends_with('\n') && !markup.is_empty() {
+                    markup.push(' ');
+                }
+                markup.push_str(&words);
+            }
+            _ => w.page.blocks.push(store::Block::Text { markup: words.clone() }),
+        }
+        w.touch();
+    }
+    if !used.is_empty() {
+        s.doc.remove_ids(&used);
+        s.sync_ws();
+    }
+    clear_expression(s);
+    s.text_result.clear();
+    s.set_status(format!("Added “{words}” to the page (Undo brings the ink back)"));
+    s.dirty |= dirty::DOC;
 }

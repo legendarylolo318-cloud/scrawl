@@ -29,16 +29,45 @@ impl Format {
 
 /// Page ink as a standalone SVG (so ink survives in PDF/PNG/HTML export).
 pub fn ink_svg(strokes: &[Stroke]) -> Option<String> {
-    let pts: Vec<&ink::Point> = strokes.iter().flat_map(|s| s.points.iter()).collect();
+    ink_layer(strokes, &[], true).map(|l| l.svg)
+}
+
+/// Ink (and typed canvas text) as an SVG plus the page-space box it covers.
+pub struct InkLayer {
+    pub svg: String,
+    pub x0: f32,
+    pub y0: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+fn dark_on_paper([r, g, b, a]: [u8; 4]) -> (u8, u8, u8, u8) {
+    // dark ink on white paper for export: invert the near-white default pen colour
+    if r > 200 && g > 200 && b > 200 {
+        (0x1a, 0x1b, 0x26, a)
+    } else {
+        (r, g, b, a)
+    }
+}
+
+/// `embed_text`: put canvas text into the SVG as `<text>` (browsers); otherwise the caller places
+/// it (Typst, whose SVG import does not use our fonts for text).
+pub fn ink_layer(strokes: &[Stroke], texts: &[store::CanvasText], embed_text: bool) -> Option<InkLayer> {
+    let mut pts: Vec<(f32, f32)> = strokes.iter().flat_map(|s| s.points.iter().map(|p| (p.x, p.y))).collect();
+    for t in texts {
+        let (a, b, c, d) = t.bbox();
+        pts.push((a, b));
+        pts.push((c, d));
+    }
     if pts.is_empty() {
         return None;
     }
     let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
-    for p in &pts {
-        x0 = x0.min(p.x);
-        y0 = y0.min(p.y);
-        x1 = x1.max(p.x);
-        y1 = y1.max(p.y);
+    for &(x, y) in &pts {
+        x0 = x0.min(x);
+        y0 = y0.min(y);
+        x1 = x1.max(x);
+        y1 = y1.max(y);
     }
     let pad = 8.0;
     let (w, h) = (x1 - x0 + 2.0 * pad, y1 - y0 + 2.0 * pad);
@@ -49,20 +78,27 @@ pub fn ink_svg(strokes: &[Stroke]) -> Option<String> {
         if st.points.is_empty() {
             continue;
         }
-        let d: String = st
-            .points
-            .iter()
-            .enumerate()
-            .map(|(i, p)| format!("{}{:.1},{:.1}", if i == 0 { "M" } else { "L" }, p.x - x0 + pad, p.y - y0 + pad))
-            .collect();
-        let [r, g, b, a] = st.color;
+        let d: String = st.points.iter().enumerate().map(|(i, p)| format!("{}{:.1},{:.1}", if i == 0 { "M" } else { "L" }, p.x - x0 + pad, p.y - y0 + pad)).collect();
+        let (r, g, b, a) = dark_on_paper(st.color);
         let width = if st.kind == ink::PenKind::Highlighter { st.width * 4.0 } else { st.width };
-        // Dark ink on white paper for export: invert near-white default pen colour.
-        let (r, g, b) = if r > 200 && g > 200 && b > 200 { (0x1a, 0x1b, 0x26) } else { (r, g, b) };
         s += &format!("<path d=\"{d}\" fill=\"none\" stroke=\"rgb({r},{g},{b})\" stroke-opacity=\"{:.2}\" stroke-width=\"{width}\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>", a as f32 / 255.0);
     }
+    if embed_text {
+        for t in texts {
+            let (r, g, b, _) = dark_on_paper(t.color);
+            for (i, line) in t.text.lines().enumerate() {
+                s += &format!(
+                    "<text x=\"{:.1}\" y=\"{:.1}\" font-size=\"{:.1}\" font-family=\"sans-serif\" fill=\"rgb({r},{g},{b})\">{}</text>",
+                    t.x - x0 + pad,
+                    t.y - y0 + pad + t.size * (1.0 + i as f32 * 1.3),
+                    t.size,
+                    esc_html(line)
+                );
+            }
+        }
+    }
     s += "</svg>";
-    Some(s)
+    Some(InkLayer { svg: s, x0: x0 - pad, y0: y0 - pad, w, h })
 }
 
 /// Files referenced by pages (images, PDF page renders) keyed by their media name.
@@ -127,10 +163,25 @@ fn typst_doc(pages: &[&Page], media: &Media, backgrounds: &[Option<Vec<u8>>], on
                 files.push((name, png.clone()));
             }
             None => {
-                if let Some(svg) = ink_svg(&p.strokes) {
+                if let Some(layer) = ink_layer(&p.strokes, &p.texts, false) {
                     let name = format!("ink{i}.svg");
-                    src += &format!("\n#image(\"{name}\", width: 100%)\n");
-                    files.push((name, svg.into_bytes()));
+                    // the ink image spans the text width; typed text is placed on top with Typst
+                    src += &format!("\n#block(width: 100%)[#image(\"{name}\", width: 100%)");
+                    let text_w = if p.mode == store::PageMode::Letter { 510.0 } else { 493.0 };
+                    let k = text_w / layer.w.max(1.0);
+                    for t in &p.texts {
+                        let (r, g, b, _) = dark_on_paper(t.color);
+                        let body: Vec<String> = t.text.lines().map(store::typst_escape).collect();
+                        src += &format!(
+                            "#place(top + left, dx: {:.2}%, dy: {:.2}%)[#text(size: {:.1}pt, fill: rgb({r}, {g}, {b}))[{}]]",
+                            (t.x - layer.x0) / layer.w * 100.0,
+                            (t.y - layer.y0) / layer.h * 100.0,
+                            t.size * k,
+                            body.join(" \\ ")
+                        );
+                    }
+                    src += "]\n";
+                    files.push((name, layer.svg.into_bytes()));
                 }
             }
         }
@@ -327,7 +378,7 @@ pub fn to_html_with(pages: &[&Page], media: &Media) -> Result<String, String> {
                 Block::Plot { .. } => s += &format!("<div class=\"plot\">{}</div>\n", plot_svg(b).unwrap_or_default()),
             }
         }
-        if let Some(svg) = ink_svg(&p.strokes) {
+        if let Some(svg) = ink_layer(&p.strokes, &p.texts, true).map(|l| l.svg) {
             s += &format!("<div class=\"ink\">{svg}</div>\n");
         }
     }
@@ -521,5 +572,26 @@ mod media_tests {
         assert!(tex.contains("5\\% \\& $x^2$"), "{tex}");
         // a missing image is reported, not a compile failure
         assert!(export_pages_with(&[&p], Format::Pdf, &Vec::new(), &[]).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod canvas_text_tests {
+    use super::*;
+
+    #[test]
+    fn typed_canvas_text_is_exported_everywhere() {
+        let mut p = Page::new("p", "Notes", "2026-11-10");
+        p.texts = vec![
+            store::CanvasText { id: 1, x: 10.0, y: 20.0, text: "Remember: brandy & <tags> $5".into(), size: 18.0, color: [255; 4] },
+            store::CanvasText { id: 2, x: 10.0, y: 80.0, text: "two\nlines".into(), size: 14.0, color: [0xf7, 0x76, 0x8e, 255] },
+        ];
+        let html = String::from_utf8(export_page(&p, Format::Html).unwrap()).unwrap();
+        assert!(html.contains("Remember: brandy &amp; &lt;tags&gt; $5"), "{html}");
+        let pdf = export_page(&p, Format::Pdf).unwrap();
+        assert!(pdf.starts_with(b"%PDF"));
+        let typ = typst_doc(&[&p], &Vec::new(), &[], false).0;
+        assert!(typ.contains("#place(top + left") && typ.contains("two \\ lines"), "{typ}");
+        assert_eq!(&export_page(&p, Format::Png).unwrap()[1..4], b"PNG");
     }
 }

@@ -41,7 +41,9 @@ cmds! {
     "pen1", "Favourite pen 1", "alt+1", "Ink";
     "pen2", "Favourite pen 2", "alt+2", "Ink";
     "pen3", "Favourite pen 3", "alt+3", "Ink";
-    "mode-math", "Math/Text ink mode", "m", "Ink";
+    "mode-math", "Math ink mode (handwriting becomes math)", "m", "Ink";
+    "mode-text", "Text ink mode (handwriting becomes words)", "w", "Ink";
+    "textbox", "Type here: put typed text straight onto the page", "t", "Ink";
     "mode-drawing", "Drawing ink mode", "d", "Ink";
     "undo", "Undo", "ctrl+z", "Ink";
     "redo", "Redo", "ctrl+y|ctrl+shift+z", "Ink";
