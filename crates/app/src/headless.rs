@@ -21,9 +21,12 @@ impl Platform for Headless {
 }
 
 /// Install the in-memory platform. Must run before any window is created.
-pub fn install(w: u32, h: u32) -> Rc<MinimalSoftwareWindow> {
+pub fn install(w: u32, h: u32, scale: f32) -> Rc<MinimalSoftwareWindow> {
     let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
     window.set_size(PhysicalSize::new(w, h));
+    if (scale - 1.0).abs() > f32::EPSILON {
+        window.dispatch_event(slint::platform::WindowEvent::ScaleFactorChanged { scale_factor: scale });
+    }
     let _ = slint::platform::set_platform(Box::new(Headless { window: window.clone(), start: std::time::Instant::now() }));
     window
 }

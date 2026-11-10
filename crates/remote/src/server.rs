@@ -16,7 +16,9 @@ use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex, RwLock};
+use rustls::server::{ClientHello, ResolvesServerCert};
+use rustls::sign::CertifiedKey;
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, watch, Notify};
@@ -88,9 +90,50 @@ struct Shared {
     bootstrap_open: AtomicBool,
     bootstrap_cert: Mutex<Option<ca::CaMaterial>>,
     hosts: Vec<String>,
+    /// Bumped on every revoke so live sessions re-check that their device is still trusted.
+    revoked: watch::Sender<u64>,
+    /// Server certificate, swappable while running (renewal).
+    cert: Arc<CertSlot>,
+    leaf: Mutex<Option<ca::Leaf>>,
+    keys: Arc<dyn KeyStore + Send + Sync>,
+    ca_pem: String,
+    renewals: AtomicU64,
+}
+
+/// Holds the current server certificate; rustls asks it on every handshake.
+#[derive(Debug)]
+struct CertSlot(RwLock<Arc<CertifiedKey>>);
+
+impl ResolvesServerCert for CertSlot {
+    fn resolve(&self, _: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
+        self.0.read().ok().map(|k| k.clone())
+    }
+}
+
+fn certified_key(cert_der: Vec<u8>, key_der: Vec<u8>) -> Result<Arc<CertifiedKey>, String> {
+    let key = rustls_pki_types::PrivateKeyDer::try_from(key_der).map_err(|e| e.to_string())?;
+    let signer = rustls::crypto::ring::sign::any_supported_type(&key).map_err(|e| e.to_string())?;
+    Ok(Arc::new(CertifiedKey::new(vec![rustls_pki_types::CertificateDer::from(cert_der)], signer)))
 }
 
 impl Shared {
+    /// Re-issue the leaf certificate when it is close to expiry. New handshakes use it at once.
+    fn renew_if_due(&self, now: u64) -> bool {
+        let mut leaf = self.leaf.lock().unwrap();
+        let Some(cur) = leaf.as_ref() else { return false };
+        if !cur.expires_soon(now) {
+            return false;
+        }
+        let Ok(new) = ca::issue_leaf_inner(&*self.keys, &self.ca_pem, &cur.ips, now, self.cfg.allow_loopback_for_tests) else { return false };
+        let Ok(ck) = certified_key(new.cert_der.clone(), new.key_der.clone()) else { return false };
+        *self.cert.0.write().unwrap() = ck;
+        *leaf = Some(new);
+        self.renewals.fetch_add(1, Ordering::Relaxed);
+        true
+    }
+    fn is_trusted(&self, device: &str) -> bool {
+        self.pairing.lock().unwrap().devices().iter().any(|d| d.id == device)
+    }
     fn touch(&self) {
         self.last_activity.store(now_ms(), Ordering::Relaxed);
     }
@@ -147,31 +190,21 @@ pub fn start(cfg: ServerConfig, keys: Arc<dyn KeyStore + Send + Sync>) -> Result
     let existing = std::fs::read_to_string(&ca_path).ok();
     let ca = ca::ensure_ca(&*keys, existing.as_deref(), now_ms())?;
     std::fs::write(&ca_path, &ca.cert_pem).map_err(|e| e.to_string())?;
-    let cert_ips: Vec<IpAddr> = ips.iter().copied().filter(|i| !i.is_loopback()).collect();
-    let leaf = if cert_ips.is_empty() { None } else { Some(ca::issue_leaf(&*keys, &ca.cert_pem, &cert_ips, now_ms())?) };
+    // Loopback is certified only in test mode (never in the app).
+    let leaf = ca::issue_leaf_inner(&*keys, &ca.cert_pem, &ips, now_ms(), cfg.allow_loopback_for_tests)?;
     let fingerprint = ca.fingerprint();
-
-    let (cert_der, key_der) = match &leaf {
-        Some(l) => (l.cert_der.clone(), l.key_der.clone()),
-        None => {
-            // loopback-only (tests): self-signed throwaway
-            let k = rcgen::KeyPair::generate().map_err(|e| e.to_string())?;
-            let c = rcgen::CertificateParams::new(vec!["localhost".into()]).map_err(|e| e.to_string())?.self_signed(&k).map_err(|e| e.to_string())?;
-            (c.der().to_vec(), k.serialize_der())
-        }
-    };
+    let (cert_der, key_der) = (leaf.cert_der.clone(), leaf.key_der.clone());
+    let leaf = Some(leaf);
+    let cert = Arc::new(CertSlot(RwLock::new(certified_key(cert_der, key_der)?)));
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let mut tls = rustls::ServerConfig::builder_with_provider(provider)
         .with_protocol_versions(&[&rustls::version::TLS13])
         .map_err(|e| e.to_string())?
         .with_no_client_auth()
-        .with_single_cert(
-            vec![rustls_pki_types::CertificateDer::from(cert_der)],
-            rustls_pki_types::PrivateKeyDer::try_from(key_der).map_err(|e| e.to_string())?,
-        )
-        .map_err(|e| e.to_string())?;
+        .with_cert_resolver(cert.clone());
     tls.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
     let acceptor = TlsAcceptor::from(Arc::new(tls));
+    let ca_pem = ca.cert_pem.clone();
 
     let (events_tx, events_rx) = mpsc::channel();
     let (out_tx, _) = broadcast::channel(256);
@@ -189,6 +222,12 @@ pub fn start(cfg: ServerConfig, keys: Arc<dyn KeyStore + Send + Sync>) -> Result
         bootstrap_open: AtomicBool::new(false),
         bootstrap_cert: Mutex::new(Some(ca)),
         hosts,
+        revoked: watch::channel(0).0,
+        cert,
+        leaf: Mutex::new(leaf),
+        keys,
+        ca_pem,
+        renewals: AtomicU64::new(0),
     });
     let (stop_tx, stop_rx) = watch::channel(false);
     let (ready_tx, ready_rx) = mpsc::channel::<Result<Vec<SocketAddr>, String>>();
@@ -264,6 +303,7 @@ async fn run(shared: Arc<Shared>, acceptor: TlsAcceptor, ips: Vec<IpAddr>, mut s
             _ = stop.changed() => break,
             _ = tick.tick() => {
                 if shared.connections.load(Ordering::Relaxed) > 0 { shared.touch(); }
+                shared.renew_if_due(now_ms());
                 let idle = now_ms().saturating_sub(shared.last_activity.load(Ordering::Relaxed));
                 if idle > shared.cfg.idle_timeout.as_millis() as u64 {
                     let _ = shared.events.send(RemoteEvent::Stopped(StopReason::Idle));
@@ -314,6 +354,7 @@ async fn socket(sh: Arc<Shared>, mut ws: WebSocket) {
     let mut limiter = RateLimiter::new(400.0, 800.0, 0);
     let mut device: Option<String> = None;
     let mut out_rx = sh.outbound.subscribe();
+    let mut rev_rx = sh.revoked.subscribe();
     sh.connections.fetch_add(1, Ordering::Relaxed);
     let deadline = tokio::time::sleep(Duration::from_secs(10));
     tokio::pin!(deadline);
@@ -321,6 +362,13 @@ async fn socket(sh: Arc<Shared>, mut ws: WebSocket) {
         tokio::select! {
             // Unauthenticated sockets get 10 seconds to pair or authenticate.
             _ = &mut deadline, if device.is_none() => break,
+            // A revoke on the PC cuts off live sessions of that device immediately.
+            _ = rev_rx.changed(), if device.is_some() => {
+                if !device.as_deref().is_some_and(|d| sh.is_trusted(d)) {
+                    let _ = send(&mut ws, &ServerMsg::Err { msg: "device revoked: pair this device again".into() }).await;
+                    break;
+                }
+            }
             fwd = out_rx.recv(), if device.is_some() => {
                 match fwd { Ok(m) => { if !send(&mut ws, &m).await { break; } } Err(broadcast::error::RecvError::Lagged(_)) => {} Err(_) => break }
             }
@@ -474,6 +522,7 @@ impl RemoteHandle {
 
     pub fn revoke(&self, id: &str) -> bool {
         let r = self.shared.pairing.lock().unwrap().revoke(id);
+        self.shared.revoked.send_modify(|g| *g += 1);
         self.shared.persist_devices();
         r
     }
@@ -481,12 +530,23 @@ impl RemoteHandle {
     /// Reset all pairing (SECURITY.md "reset").
     pub fn revoke_all(&self) {
         self.shared.pairing.lock().unwrap().revoke_all();
+        self.shared.revoked.send_modify(|g| *g += 1);
         self.shared.persist_devices();
     }
 
     /// Push a state / candidate / frame update to connected devices.
     pub fn send(&self, m: ServerMsg) {
         let _ = self.shared.outbound.send(m);
+    }
+
+    /// Re-issue the server certificate if it is due at `now` (the watchdog calls this every 2 s).
+    pub fn renew_if_due(&self, now: u64) -> bool {
+        self.shared.renew_if_due(now)
+    }
+
+    /// How many times the server certificate was renewed while running.
+    pub fn cert_renewals(&self) -> u64 {
+        self.shared.renewals.load(Ordering::Relaxed)
     }
 
     pub fn connected_devices(&self) -> u64 {

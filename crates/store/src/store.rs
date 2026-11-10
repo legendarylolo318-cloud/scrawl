@@ -160,7 +160,12 @@ impl Store {
         let from = vpath(&self.page_base(&nb.id, page_id), vault);
         let to = self.nb_dir(&nb.id).join("trash").join(from.file_name().unwrap());
         std::fs::create_dir_all(to.parent().unwrap())?;
-        std::fs::rename(from, to)?;
+        std::fs::rename(from, &to)?;
+        // the human-readable .typ copy goes to the trash too, so a purge really removes the text
+        let typ = vpath(&self.page_base(&nb.id, page_id).with_extension("typ"), vault);
+        if typ.exists() {
+            std::fs::rename(&typ, to.with_file_name(typ.file_name().unwrap()))?;
+        }
         self.save_notebook(nb, vault)
     }
 
@@ -172,6 +177,11 @@ impl Store {
         let from = self.nb_dir(&nb.id).join("trash").join(name.file_name().unwrap());
         std::fs::create_dir_all(name.parent().unwrap())?;
         std::fs::rename(from, &name)?;
+        let typ = vpath(&self.page_base(&nb.id, page_id).with_extension("typ"), vault);
+        let typ_trash = self.nb_dir(&nb.id).join("trash").join(typ.file_name().unwrap());
+        if typ_trash.exists() {
+            std::fs::rename(typ_trash, &typ)?;
+        }
         let section = if nb.sections.iter().any(|s| s.id == entry.section_id) { entry.section_id } else { nb.sections.first().map(|s| s.id.clone()).ok_or_else(|| StoreError::NotFound("any section".into()))? };
         nb.add_page(&section, PageRef { id: entry.page_id, title: entry.title });
         write_json(&self.trash_index_base(&nb.id), &trash, vault)?;
@@ -185,6 +195,8 @@ impl Store {
         for t in &old {
             let name = vpath(&self.page_base(nb, &t.page_id), vault);
             std::fs::remove_file(self.nb_dir(nb).join("trash").join(name.file_name().unwrap())).ok();
+            let typ = vpath(&self.page_base(nb, &t.page_id).with_extension("typ"), vault);
+            std::fs::remove_file(self.nb_dir(nb).join("trash").join(typ.file_name().unwrap())).ok();
             std::fs::remove_dir_all(self.nb_dir(nb).join("history").join(&t.page_id)).ok();
         }
         if !old.is_empty() {
@@ -246,6 +258,26 @@ impl Store {
     }
 
     // ---- user templates --------------------------------------------------------------
+
+    // ---- media (images, PDF page renders, audio): sealed with the notebook's vault --------
+
+    fn media_base(&self, nb: &str, name: &str) -> Result<PathBuf> {
+        // only plain file names: no separators, no parent references
+        if name.is_empty() || name.contains(['/', '\\', ':']) || name.starts_with('.') {
+            return Err(StoreError::NotFound(format!("bad media name {name}")));
+        }
+        Ok(self.nb_dir(nb).join("media").join(name))
+    }
+
+    pub fn write_media(&self, nb: &str, name: &str, bytes: &[u8], vault: &Vault) -> Result<()> {
+        atomic_write(&vpath(&self.media_base(nb, name)?, vault), &vault.seal(bytes)?)?;
+        Ok(())
+    }
+
+    pub fn read_media(&self, nb: &str, name: &str, vault: &Vault) -> Result<Vec<u8>> {
+        let p = vpath(&self.media_base(nb, name)?, vault);
+        Ok(vault.open(&std::fs::read(p)?)?)
+    }
 
     pub fn save_template(&self, name: &str, page: &Page) -> Result<()> {
         let safe: String = name.chars().filter(|c| c.is_alphanumeric() || *c == ' ' || *c == '-').collect();

@@ -65,18 +65,74 @@ pub fn ink_svg(strokes: &[Stroke]) -> Option<String> {
     Some(s)
 }
 
-fn typst_doc(pages: &[&Page]) -> (String, Vec<(String, Vec<u8>)>) {
-    let mut src = String::from("#set page(paper: \"a4\", margin: 18mm)\n#set text(size: 11pt)\n");
-    let mut files = Vec::new();
+/// Files referenced by pages (images, PDF page renders) keyed by their media name.
+pub type Media = Vec<(String, Vec<u8>)>;
+
+/// Render a plot block to SVG (light theme, for paper).
+pub fn plot_svg(b: &Block) -> Option<String> {
+    let Block::Plot { functions, x_range, y_range } = b else { return None };
+    let plot = media::plot::Plot {
+        curves: functions.iter().map(|f| media::plot::Curve::Cartesian(f.split_once('=').map_or(f.as_str(), |(_, r)| r).trim().to_string())).collect(),
+        x_range: (x_range.0 as f64, x_range.1 as f64),
+        y_range: y_range.map(|(a, b)| (a as f64, b as f64)),
+        x_label: "x".into(),
+        y_label: "y".into(),
+    };
+    media::plot::render_svg(&plot, 480.0, 300.0, false).ok()
+}
+
+/// Typst source for the pages plus every file it references. `media` supplies image bytes;
+/// `backgrounds[i]` is an optional pre-composited background+ink PNG for page i (PDF annotation).
+fn typst_doc(pages: &[&Page], media: &Media, backgrounds: &[Option<Vec<u8>>], one_tall_page: bool) -> (String, Vec<(String, Vec<u8>)>) {
+    let mut src = pages.first().map(|p| p.paper_typst()).unwrap_or("#set page(paper: \"a4\", margin: 18mm)\n").to_string();
+    if one_tall_page {
+        src += "#set page(height: auto)\n";
+    }
+    src += "#set text(size: 11pt)\n";
+    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
     for (i, p) in pages.iter().enumerate() {
         if i > 0 {
             src += "#pagebreak()\n";
         }
-        src += &p.to_typst();
-        if let Some(svg) = ink_svg(&p.strokes) {
-            let name = format!("ink{i}.svg");
-            src += &format!("\n#image(\"{name}\", width: 100%)\n");
-            files.push((name, svg.into_bytes()));
+        src += &p.header_typst();
+        for (j, b) in p.blocks.iter().enumerate() {
+            src += "\n";
+            match b {
+                Block::Image { file, .. } => match media.iter().find(|(n, _)| n == file) {
+                    Some((n, bytes)) => {
+                        if !files.iter().any(|(f, _)| f == n) {
+                            files.push((n.clone(), bytes.clone()));
+                        }
+                        src += &store::block_typst(b, None);
+                    }
+                    None => src += &format!("_[missing image {}]_\n", store::typst_escape(file)),
+                },
+                Block::Plot { .. } => {
+                    let name = format!("plot{i}-{j}.svg");
+                    match plot_svg(b) {
+                        Some(svg) => {
+                            files.push((name.clone(), svg.into_bytes()));
+                            src += &store::block_typst(b, Some(&name));
+                        }
+                        None => src += &store::block_typst(b, None),
+                    }
+                }
+                _ => src += &store::block_typst(b, None),
+            }
+        }
+        match backgrounds.get(i).and_then(|b| b.as_ref()) {
+            Some(png) => {
+                let name = format!("page{i}.png");
+                src += &format!("\n#image(\"{name}\", width: 100%)\n");
+                files.push((name, png.clone()));
+            }
+            None => {
+                if let Some(svg) = ink_svg(&p.strokes) {
+                    let name = format!("ink{i}.svg");
+                    src += &format!("\n#image(\"{name}\", width: 100%)\n");
+                    files.push((name, svg.into_bytes()));
+                }
+            }
         }
     }
     (src, files)
@@ -134,26 +190,82 @@ pub fn to_markdown(p: &Page) -> String {
     s
 }
 
+/// Escape LaTeX special characters in text; `$...$` inline math is passed through.
+pub fn latex_escape(s: &str) -> String {
+    let mut out = String::new();
+    for (k, part) in s.split('$').enumerate() {
+        if k > 0 {
+            out.push('$');
+        }
+        if k % 2 == 1 && s.matches('$').count() % 2 == 0 {
+            out += part; // inside inline math
+            continue;
+        }
+        for c in part.chars() {
+            match c {
+                '\\' => out += "\\textbackslash{}",
+                '{' | '}' | '#' | '%' | '&' | '_' => {
+                    out.push('\\');
+                    out.push(c);
+                }
+                '^' => out += "\\textasciicircum{}",
+                '~' => out += "\\textasciitilde{}",
+                '*' => {}
+                _ => out.push(c),
+            }
+        }
+    }
+    if s.matches('$').count() % 2 == 1 {
+        out = out.replace('$', "\\$");
+    }
+    out
+}
+
+fn latex_markup(markup: &str, s: &mut String) {
+    let mut list: Option<&str> = None;
+    for line in markup.lines() {
+        let t = line.trim_start();
+        let item = t.strip_prefix("- ").map(|r| ("itemize", r)).or_else(|| t.strip_prefix("+ ").map(|r| ("enumerate", r)));
+        if list.is_some() && item.map(|i| i.0) != list {
+            *s += &format!("\\end{{{}}}\n", list.take().unwrap_or("itemize"));
+        }
+        if let Some((env, rest)) = item {
+            if list.is_none() {
+                *s += &format!("\\begin{{{env}}}\n");
+                list = Some(env);
+            }
+            *s += &format!("\\item {}\n", latex_escape(rest));
+            continue;
+        }
+        let h = t.chars().take_while(|c| *c == '=').count();
+        if h > 0 {
+            *s += &format!("\\{}section*{{{}}}\n", if h >= 3 { "subsub" } else { "sub" }, latex_escape(t[h..].trim()));
+        } else if t.starts_with("```") {
+            *s += "% code fence\n";
+        } else {
+            *s += &format!("{}\n", latex_escape(t));
+        }
+    }
+    if let Some(env) = list {
+        *s += &format!("\\end{{{env}}}\n");
+    }
+}
+
 pub fn to_latex_doc(pages: &[&Page]) -> String {
-    let mut s = String::from("\\documentclass{article}\n\\usepackage{amsmath,amssymb,amsfonts}\n\\usepackage[utf8]{inputenc}\n\\begin{document}\n");
+    let mut s = String::from("\\documentclass{article}\n\\usepackage{amsmath,amssymb,amsfonts}\n\\usepackage[utf8]{inputenc}\n\\usepackage{graphicx}\n\\begin{document}\n");
     for p in pages {
-        s += &format!("\\section*{{{}}}\n", p.title.replace('_', "\\_").replace('&', "\\&"));
+        s += &format!("\\section*{{{}}}\n", latex_escape(&p.title));
         for b in &p.blocks {
             match b {
                 Block::Math { expr, source } => s += &format!("\\[\n{}\n\\]\n", if expr.is_empty() { source.clone().unwrap_or_default() } else { expr.to_latex() }),
-                Block::Text { markup } | Block::Callout { markup, .. } => {
-                    for line in markup.lines() {
-                        let t = line.trim_start();
-                        let h = t.chars().take_while(|c| *c == '=').count();
-                        if h > 0 {
-                            s += &format!("\\subsection*{{{}}}\n", t[h..].trim());
-                        } else {
-                            s += &format!("{}\n", t.replace('#', "\\#").replace('_', "\\_"));
-                        }
-                    }
+                Block::Text { markup } => latex_markup(markup, &mut s),
+                Block::Callout { kind, markup } => {
+                    s += &format!("\\paragraph{{{kind:?}.}}\n");
+                    latex_markup(markup, &mut s);
                 }
-                Block::Rule => s += "\\hrule\n",
-                _ => {}
+                Block::Rule => s += "\\noindent\\rule{\\linewidth}{0.4pt}\n",
+                Block::Image { file, .. } => s += &format!("\\includegraphics[width=0.8\\linewidth]{{{}}}\n", latex_escape(file)),
+                Block::Plot { functions, .. } => s += &format!("\\emph{{Plot: {}}}\n", latex_escape(&functions.join(", "))),
             }
         }
     }
@@ -167,6 +279,24 @@ fn esc_html(s: &str) -> String {
 
 /// Self-contained HTML: math is embedded as SVG so it renders offline with no scripts.
 pub fn to_html(pages: &[&Page]) -> Result<String, String> {
+    to_html_with(pages, &Vec::new())
+}
+
+fn data_uri(name: &str, bytes: &[u8]) -> String {
+    use base64::Engine;
+    let mime = match name.rsplit('.').next().unwrap_or("").to_ascii_lowercase().as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        _ => "application/octet-stream",
+    };
+    format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes))
+}
+
+/// Self-contained HTML; images are embedded as data URIs.
+pub fn to_html_with(pages: &[&Page], media: &Media) -> Result<String, String> {
     let mut s = String::from("<!doctype html><html><head><meta charset=\"utf-8\"><title>Scrawl export</title><style>body{font-family:sans-serif;max-width:48em;margin:2em auto;padding:0 1em}.callout{background:#eef;padding:.6em;border-radius:6px}</style></head><body>\n");
     for p in pages {
         s += &format!("<h1>{}</h1>\n", esc_html(&p.title));
@@ -190,8 +320,11 @@ pub fn to_html(pages: &[&Page]) -> Result<String, String> {
                 }
                 Block::Callout { kind, markup } => s += &format!("<div class=\"callout\"><b>{}.</b> {}</div>\n", match kind { CalloutKind::Definition => "Definition", CalloutKind::Theorem => "Theorem", CalloutKind::Example => "Example", CalloutKind::Warning => "Warning" }, esc_html(markup)),
                 Block::Rule => s += "<hr>\n",
-                Block::Image { file, .. } => s += &format!("<img src=\"{}\" alt=\"\">\n", esc_html(file)),
-                Block::Plot { functions, .. } => s += &format!("<p><i>Plot: {}</i></p>\n", esc_html(&functions.join(", "))),
+                Block::Image { file, w, .. } => match media.iter().find(|(n, _)| n == file) {
+                    Some((n, b)) => s += &format!("<img src=\"{}\" width=\"{w}\" alt=\"\">\n", data_uri(n, b)),
+                    None => s += &format!("<p><i>[missing image {}]</i></p>\n", esc_html(file)),
+                },
+                Block::Plot { .. } => s += &format!("<div class=\"plot\">{}</div>\n", plot_svg(b).unwrap_or_default()),
             }
         }
         if let Some(svg) = ink_svg(&p.strokes) {
@@ -203,13 +336,21 @@ pub fn to_html(pages: &[&Page]) -> Result<String, String> {
 }
 
 pub fn export_pages(pages: &[&Page], fmt: Format) -> Result<Vec<u8>, String> {
+    export_pages_with(pages, fmt, &Vec::new(), &[])
+}
+
+/// Export with the pages' media (images) and optional per-page background composites.
+pub fn export_pages_with(pages: &[&Page], fmt: Format, media: &Media, backgrounds: &[Option<Vec<u8>>]) -> Result<Vec<u8>, String> {
     match fmt {
         Format::Markdown => Ok(pages.iter().map(|p| to_markdown(p)).collect::<Vec<_>>().join("\n\n---\n\n").into_bytes()),
-        Format::Typst => Ok(pages.iter().map(|p| p.to_typst()).collect::<Vec<_>>().join("\n#pagebreak()\n").into_bytes()),
+        Format::Typst => {
+            let (src, _) = typst_doc(pages, media, &[], false);
+            Ok(src.into_bytes())
+        }
         Format::Latex => Ok(to_latex_doc(pages).into_bytes()),
-        Format::Html => to_html(pages).map(String::into_bytes),
+        Format::Html => to_html_with(pages, media).map(String::into_bytes),
         Format::Pdf | Format::Png => {
-            let (src, files) = typst_doc(pages);
+            let (src, files) = typst_doc(pages, media, backgrounds, fmt == Format::Png);
             let refs: Vec<(&str, Vec<u8>)> = files.iter().map(|(n, b)| (n.as_str(), b.clone())).collect();
             let doc = render::compile(&src, &refs)?;
             if fmt == Format::Pdf {
@@ -347,5 +488,38 @@ mod tests {
         assert_eq!(copy_block(&e, CopyAs::Typst).unwrap(), b"x^2");
         assert_eq!(copy_block(&e, CopyAs::Unicode).unwrap(), "x²".as_bytes());
         assert_eq!(&copy_block(&e, CopyAs::Image).unwrap()[1..4], b"PNG");
+    }
+}
+
+#[cfg(test)]
+mod media_tests {
+    use super::*;
+
+    fn png_1x1() -> Vec<u8> {
+        let doc = render::compile("#set page(width: 10pt, height: 10pt, margin: 0pt)\n#rect(fill: red)", &[]).unwrap();
+        render::png(&doc, 0, 1.0).unwrap()
+    }
+
+    #[test]
+    fn images_plots_and_hostile_titles_export() {
+        let mut p = Page::new("p", "Costs: 50% & $5 #1 _x_ {y}", "2026-11-10");
+        p.blocks = vec![
+            Block::Image { file: "a.png".into(), x: 0.0, y: 0.0, w: 120.0, h: 80.0, crop: Some([0.1, 0.1, 0.1, 0.1]) },
+            Block::Plot { functions: vec!["y = sin(x)".into()], x_range: (-3.0, 3.0), y_range: None },
+            Block::Text { markup: "- one\n- two\n+ first\nprice 5% & $x^2$".into() },
+        ];
+        let media = vec![("a.png".to_string(), png_1x1())];
+        let pdf = export_pages_with(&[&p], Format::Pdf, &media, &[]).unwrap();
+        assert!(pdf.starts_with(b"%PDF"));
+        let png = export_pages_with(&[&p], Format::Png, &media, &[]).unwrap();
+        assert_eq!(&png[1..4], b"PNG");
+        let html = String::from_utf8(export_pages_with(&[&p], Format::Html, &media, &[]).unwrap()).unwrap();
+        assert!(html.contains("data:image/png;base64,") && html.contains("class=\"plot\"><svg"));
+        let tex = to_latex_doc(&[&p]);
+        assert!(tex.contains("Costs: 50\\% \\& \\$5 \\#1 \\_x\\_ \\{y\\}"), "{tex}");
+        assert!(tex.contains("\\begin{itemize}\n\\item one\n\\item two\n\\end{itemize}\n\\begin{enumerate}"), "{tex}");
+        assert!(tex.contains("5\\% \\& $x^2$"), "{tex}");
+        // a missing image is reported, not a compile failure
+        assert!(export_pages_with(&[&p], Format::Pdf, &Vec::new(), &[]).is_ok());
     }
 }

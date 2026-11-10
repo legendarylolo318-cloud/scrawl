@@ -255,3 +255,86 @@ async fn idle_timeout_stops_the_server_and_stop_closes_ports() {
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert!(TcpStream::connect(("127.0.0.1", port)).await.is_err(), "port closed after stop");
 }
+
+async fn peer_cert(port: u16) -> Vec<u8> {
+    let s = tls(port, &[&rustls::version::TLS13]).await.unwrap();
+    s.get_ref().1.peer_certificates().unwrap()[0].to_vec()
+}
+
+#[tokio::test]
+async fn revoking_a_device_cuts_off_its_live_session() {
+    let (h, port, _) = server(Duration::from_secs(60));
+    let origin = format!("https://127.0.0.1:{port}");
+    let (dev, secret) = do_pairing(&h, port).await;
+    let mut w = ws(port, Some(&origin)).await.unwrap();
+    w.send(Message::text(format!(r#"{{"t":"auth","device":"{dev}","secret":"{secret}"}}"#))).await.unwrap();
+    assert_eq!(recv_json(&mut w).await["t"], "auth_ok");
+    assert!(h.revoke(&dev));
+    let m = recv_json(&mut w).await;
+    assert_eq!(m["t"], "err", "the live session is told it was revoked");
+    // and then the socket is closed: further ink never arrives
+    let _ = w.send(Message::text(r#"{"t":"strokes","seq":9,"id":1,"pen":"pen","width":3.0,"pts":[[1,2,0.5,0,0,0]],"done":true}"#)).await;
+    let closed = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match w.next().await {
+                None | Some(Err(_)) | Some(Ok(Message::Close(_))) => return true,
+                _ => continue,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+    assert!(closed, "revoked session is closed");
+    assert!(h.events.recv_timeout(Duration::from_millis(300)).map_or(true, |e| !matches!(e, RemoteEvent::Strokes { .. })));
+    h.stop();
+}
+
+#[tokio::test]
+async fn leaf_certificate_is_renewed_while_running() {
+    let (h, port, _) = server(Duration::from_secs(60));
+    let before = peer_cert(port).await;
+    assert!(!h.renew_if_due(remote::server::now_ms()), "fresh certificate is not renewed");
+    let later = remote::server::now_ms() + (remote::ca::LEAF_DAYS as u64 - 1) * 86_400_000;
+    assert!(h.renew_if_due(later), "renewed close to expiry");
+    assert_eq!(h.cert_renewals(), 1);
+    let after = peer_cert(port).await;
+    assert_ne!(before, after, "new handshakes get the new certificate without a restart");
+    h.stop();
+}
+
+async fn http_get(port: u16, path: &str) -> String {
+    let mut s = tls(port, &[&rustls::version::TLS13]).await.unwrap();
+    s.write_all(format!("GET {path} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+    let mut body = String::new();
+    s.read_to_string(&mut body).await.ok();
+    body
+}
+
+#[tokio::test]
+async fn static_routes_resist_traversal_and_hostile_frames_are_dropped() {
+    let (h, port, _) = server(Duration::from_secs(60));
+    for p in ["/../../etc/passwd", "/%2e%2e/%2e%2e/etc/passwd", "/..%2fCargo.toml", "/app.js/../../ca.pem", "//etc/passwd", "/devices.json", "/ca.pem", "/notes"] {
+        let r = http_get(port, p).await;
+        assert!(!r.starts_with("HTTP/1.1 200"), "{p} must not be served: {r}");
+        assert!(!r.contains("BEGIN CERTIFICATE") && !r.contains("secret_hash") && !r.contains("root:"), "{p} leaked data");
+    }
+    // unauthenticated junk, an oversized frame and a huge point count never reach the app
+    let origin = format!("https://127.0.0.1:{port}");
+    let mut w = ws(port, Some(&origin)).await.unwrap();
+    let big: String = format!(r#"{{"t":"text","seq":1,"s":"{}"}}"#, "x".repeat(remote::protocol::MAX_MESSAGE_BYTES * 2));
+    let _ = w.send(Message::text(big)).await;
+    let pts: Vec<String> = (0..5000).map(|i| format!("[{i},1,0.5,0,0,1]")).collect();
+    let mut w2 = ws(port, Some(&origin)).await.unwrap();
+    let _ = w2.send(Message::text(format!(r#"{{"t":"strokes","seq":1,"id":1,"pen":"pen","width":3.0,"pts":[{}],"done":true}}"#, pts.join(",")))).await;
+    let mut w3 = ws(port, Some(&origin)).await.unwrap();
+    for i in 0..2000 {
+        if w3.send(Message::text(format!(r#"{{"t":"text","seq":{i},"s":"flood"}}"#))).await.is_err() {
+            break;
+        }
+    }
+    let leaked = h.events.recv_timeout(Duration::from_millis(500));
+    assert!(leaked.map_or(true, |e| !matches!(e, RemoteEvent::Strokes { .. } | RemoteEvent::Text(_))), "nothing from unpaired sockets is applied");
+    // the server is still healthy afterwards
+    assert!(http_get(port, "/").await.starts_with("HTTP/1.1 200"));
+    h.stop();
+}

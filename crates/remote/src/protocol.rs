@@ -186,6 +186,14 @@ impl RateLimiter {
     }
 }
 
+impl ServerMsg {
+    /// The active block's render (PNG bytes) for the device; an empty slice hides it.
+    pub fn frame(png: &[u8]) -> Self {
+        use base64::Engine;
+        ServerMsg::Frame { png: base64::engine::general_purpose::STANDARD.encode(png) }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

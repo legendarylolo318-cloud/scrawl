@@ -5,7 +5,7 @@
 //!   to impersonate a real website.
 //! * The CA private key lives in the OS keyring (Secret Service / Windows Credential Manager), never
 //!   as a plaintext file. Only the public certificate is stored on disk.
-//! * Leaf certificates are valid for 30 days and are re-issued when they near expiry or when the
+//! * Leaf certificates are valid for 7 days and are re-issued when they near expiry or when the
 //!   machine's LAN IPs change.
 
 use rcgen::{
@@ -15,8 +15,8 @@ use rcgen::{
 use sha2::{Digest, Sha256};
 use std::net::IpAddr;
 
-pub const LEAF_DAYS: i64 = 30;
-pub const RENEW_BEFORE_DAYS: i64 = 7;
+pub const LEAF_DAYS: i64 = 7;
+pub const RENEW_BEFORE_DAYS: i64 = 2;
 const CA_YEARS: i32 = 10;
 
 /// Where the CA private key (PEM) is kept.
@@ -161,9 +161,15 @@ pub struct Leaf {
     pub ips: Vec<IpAddr>,
 }
 
-/// Issue a 30-day server certificate for the given private IPs (and `scrawl.local`).
+/// Issue a 7-day server certificate for the given private IPs (and `scrawl.local`).
 pub fn issue_leaf(keys: &dyn KeyStore, ca_cert_pem: &str, ips: &[IpAddr], now_ms: u64) -> Result<Leaf, String> {
-    let ips: Vec<IpAddr> = ips.iter().copied().filter(|i| is_private_ip(*i)).collect();
+    issue_leaf_inner(keys, ca_cert_pem, ips, now_ms, false)
+}
+
+/// Tests only: also certify 127.0.0.1 so renewal can be exercised over loopback.
+#[doc(hidden)]
+pub fn issue_leaf_inner(keys: &dyn KeyStore, ca_cert_pem: &str, ips: &[IpAddr], now_ms: u64, allow_loopback: bool) -> Result<Leaf, String> {
+    let ips: Vec<IpAddr> = ips.iter().copied().filter(|i| is_private_ip(*i) || (allow_loopback && i.is_loopback())).collect();
     if ips.is_empty() {
         return Err("no private-range network interface to certify".into());
     }
@@ -185,6 +191,11 @@ pub fn issue_leaf(keys: &dyn KeyStore, ca_cert_pem: &str, ips: &[IpAddr], now_ms
 }
 
 impl Leaf {
+    /// True in the last `RENEW_BEFORE_DAYS` of the certificate's life.
+    pub fn expires_soon(&self, now_ms: u64) -> bool {
+        (now_ms.saturating_sub(self.issued_ms) / 86_400_000) as i64 >= LEAF_DAYS - RENEW_BEFORE_DAYS
+    }
+
     /// Re-issue when close to expiry or when the set of LAN IPs changed.
     pub fn needs_renewal(&self, now_ms: u64, current_ips: &[IpAddr]) -> bool {
         let age_days = now_ms.saturating_sub(self.issued_ms) / 86_400_000;
@@ -319,8 +330,8 @@ mod tests {
         let ips = [ip(192, 168, 1, 50)];
         let leaf = issue_leaf(&keys, &ca.cert_pem, &ips, NOW).unwrap();
         let day = 86_400_000;
-        assert!(!leaf.needs_renewal(NOW + 10 * day, &ips));
-        assert!(leaf.needs_renewal(NOW + 24 * day, &ips), "renew in the last week");
+        assert!(!leaf.needs_renewal(NOW + 2 * day, &ips));
+        assert!(leaf.needs_renewal(NOW + 5 * day, &ips), "renew in the last two days");
         assert!(leaf.needs_renewal(NOW + day, &[ip(192, 168, 1, 77)]), "IP changed");
         assert!(!leaf.needs_renewal(NOW + day, &[ip(192, 168, 1, 50), ip(8, 8, 8, 8)]), "public IPs are ignored");
     }

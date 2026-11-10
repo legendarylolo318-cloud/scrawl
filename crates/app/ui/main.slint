@@ -1,51 +1,156 @@
-import { Slider, TextEdit, LineEdit, ComboBox, ScrollView } from "std-widgets.slint";
+import { TextEdit, LineEdit, ComboBox, ScrollView, Palette, CheckBox } from "std-widgets.slint";
 
-// Tokyo Night palette
+// Colours and scale are set from Rust (Settings: dark / light / high contrast / custom theme, UI scale).
 export global Theme {
-    out property <color> bg: #1a1b26;
-    out property <color> surface: #24283b;
-    out property <color> accent: #7aa2f7;
-    out property <color> text: #c0caf5;
-    out property <color> urgent: #f7768e;
-    out property <color> muted: #565f89;
+    in-out property <color> bg: #1a1b26;
+    in-out property <color> surface: #24283b;
+    in-out property <color> panel: #1f2335;
+    in-out property <color> hover: #2f354d;
+    in-out property <color> accent: #7aa2f7;
+    in-out property <color> text: #c0caf5;
+    in-out property <color> on-accent: #1a1b26;
+    in-out property <color> urgent: #f7768e;
+    in-out property <color> muted: #737aa2;
+    in-out property <bool> dark: true;
+    in-out property <float> scale: 1.0;
+    out property <length> hit: 40px * scale;
+    out property <length> fs: 14px * scale;
+    out property <length> fs-small: 12px * scale;
 }
 
-export struct PageRow { id: string, title: string, detail: string, current: bool }
+export struct PageRow { id: string, title: string, detail: string, current: bool, favorite: bool, is-section: bool, section: string }
 export struct ParamRow { name: string, value: float, min: float, max: float }
 export struct LabelRow { x: length, y: length, text: string }
 export struct DeviceRow { id: string, name: string, detail: string }
+export struct BlockRow { idx: int, kind: string, image: image, has-image: bool, text: string, error: string }
+export struct CmdRow { id: string, title: string, key: string, group: string }
+export struct SymRow { sym: string, name: string }
+export struct TabRow { id: string, title: string, current: bool }
+export struct ItemRow { id: string, title: string, detail: string }
+export struct SwatchRow { r: int, g: int, b: int, active: bool }
 
 component ToolButton inherits Rectangle {
     in property <string> label;
     in property <bool> active: false;
     in property <bool> enabled: true;
     in property <bool> urgent: false;
+    in property <string> tip;
     callback clicked();
-    min-width: max(40px, txt.preferred-width + 22px);
-    min-height: 40px;
-    border-radius: 6px;
-    background: !enabled ? transparent : urgent ? Theme.urgent : active ? Theme.accent : ta.has-hover ? #2f354d : Theme.surface;
+    min-width: max(Theme.hit, txt.preferred-width + 22px * Theme.scale);
+    preferred-width: self.min-width;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+    max-height: Theme.hit;
+    min-height: Theme.hit;
+    border-radius: 6px * Theme.scale;
+    background: !enabled ? transparent : urgent ? Theme.urgent : active ? Theme.accent : ta.has-hover ? Theme.hover : Theme.surface;
+    border-width: ta.has-hover && enabled ? 1px : 0px;
+    border-color: Theme.accent;
+    accessible-role: button;
+    accessible-label: root.tip != "" ? root.tip : root.label;
+    accessible-action-default => { root.clicked(); }
     txt := Text {
         text: label;
-        font-size: 13px;
-        color: !enabled ? Theme.muted : (active || urgent) ? Theme.bg : Theme.text;
+        font-size: Theme.fs;
+        color: !enabled ? Theme.muted : (active || urgent) ? Theme.on-accent : Theme.text;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
     ta := TouchArea {
         enabled: root.enabled;
+        mouse-cursor: pointer;
         clicked => { root.clicked(); }
     }
 }
 
+// Large, forgiving slider: a 40 px track you can press anywhere, plus - / + buttons for exact steps.
+component BigSlider inherits HorizontalLayout {
+    in property <string> label;
+    in property <float> value;
+    in property <float> minimum: 0;
+    in property <float> maximum: 1;
+    in property <float> step: 0.05;
+    in property <string> display;
+    in property <length> track-width: 120px * Theme.scale;
+    callback changed(float);
+    spacing: 4px * Theme.scale;
+    Text { text: root.label + " " + root.display; color: Theme.text; font-size: Theme.fs-small; vertical-alignment: center; min-width: 60px * Theme.scale; }
+    ToolButton { label: "−"; tip: "Decrease " + root.label; clicked => { root.changed(max(root.minimum, root.value - root.step)); } }
+    track := Rectangle {
+        width: root.track-width;
+        height: Theme.hit;
+        border-radius: 6px * Theme.scale;
+        background: Theme.surface;
+        Rectangle {
+            x: 0; y: (parent.height - self.height) / 2;
+            height: 8px * Theme.scale; border-radius: 4px * Theme.scale;
+            width: parent.width * (root.value - root.minimum) / max(0.0001, root.maximum - root.minimum);
+            background: Theme.accent;
+        }
+        Rectangle {
+            width: 22px * Theme.scale; height: 22px * Theme.scale; border-radius: 11px * Theme.scale;
+            y: (parent.height - self.height) / 2;
+            x: (parent.width - self.width) * (root.value - root.minimum) / max(0.0001, root.maximum - root.minimum);
+            background: Theme.text;
+        }
+        sta := TouchArea {
+            function set(x: length) {
+                root.changed(root.minimum + (root.maximum - root.minimum) * max(0, min(1, x / self.width)));
+            }
+            pointer-event(e) => { if e.kind == PointerEventKind.down { self.set(self.mouse-x); } }
+            moved => { if self.pressed { self.set(self.mouse-x); } }
+        }
+    }
+    ToolButton { label: "+"; tip: "Increase " + root.label; clicked => { root.changed(min(root.maximum, root.value + root.step)); } }
+}
+
 // A toolbar row that scrolls horizontally instead of clipping when the window is narrow.
 component ScrollRow inherits Rectangle {
+    in property <length> pad: 6px * Theme.scale;
+    height: Theme.hit + 2 * root.pad;
+    vertical-stretch: 0;
     Flickable {
         content-width: hl.preferred-width;
         interactive: true;
         hl := HorizontalLayout {
-            padding: 6px;
-            spacing: 6px;
+            padding: root.pad;
+            spacing: 6px * Theme.scale;
+            alignment: start;
+            @children
+        }
+    }
+}
+
+component SectionTitle inherits Text {
+    color: Theme.muted;
+    font-size: Theme.fs-small;
+    font-weight: 700;
+}
+
+// Modal card in the middle of the window; clicking the dimmed area closes it.
+component Modal inherits Rectangle {
+    in property <string> title;
+    in property <length> card-w: 640px;
+    in property <length> card-h: 560px;
+    callback close();
+    background: #000000a0;
+    TouchArea { clicked => { root.close(); } }
+    card := Rectangle {
+        width: min(root.width - 24px, root.card-w * Theme.scale);
+        height: min(root.height - 24px, root.card-h * Theme.scale);
+        border-radius: 10px;
+        background: Theme.panel;
+        border-width: 1px;
+        border-color: Theme.accent;
+        TouchArea { } // swallow clicks inside the card
+        VerticalLayout {
+            padding: 12px * Theme.scale;
+            spacing: 8px * Theme.scale;
+            HorizontalLayout {
+                spacing: 8px;
+                Text { text: root.title; color: Theme.text; font-size: Theme.fs * 1.25; font-weight: 700; vertical-alignment: center; horizontal-stretch: 1; }
+                ToolButton { label: "Close"; tip: "Close (Esc)"; clicked => { root.close(); } }
+            }
             @children
         }
     }
@@ -58,17 +163,37 @@ export component MainWindow inherits Window {
     preferred-width: 1280px;
     preferred-height: 780px;
     background: Theme.bg;
+    default-font-size: Theme.fs;
+    accessible-role: groupbox;
 
-    // ---- adaptive layout: panels shrink with the window, the sidebar hides when it is very narrow
-    // Tracked imperatively (a `changed` handler) so the layout does not depend on itself.
+    // ---- adaptive layout
     in-out property <length> win-w: 1280px;
-    init => { root.win-w = root.width; }
-    changed width => { root.win-w = root.width; }
+    in-out property <length> win-h: 780px;
+    init => { root.win-w = root.width; root.win-h = root.height; }
+    changed width => { root.win-w = root.width; root.window-resized(root.width, root.height); }
+    changed height => { root.win-h = root.height; root.window-resized(root.width, root.height); }
+    in-out property <bool> dark-scheme: true;
+    changed dark-scheme => { Palette.color-scheme = root.dark-scheme ? ColorScheme.dark : ColorScheme.light; }
     property <bool> narrow: root.win-w < 1000px;
     property <bool> tiny: root.win-w < 700px;
-    property <length> sidebar-w: root.narrow ? max(170px, root.win-w * 0.22) : 270px;
-    property <length> graph-panel-w: min(330px, max(220px, root.win-w * 0.36));
-    property <length> tablet-w: min(300px, max(220px, root.win-w * 0.34));
+    property <bool> short: root.win-h < 560px;
+    property <length> sidebar-w: root.narrow ? max(180px, root.win-w * 0.22) : 270px * Theme.scale;
+    property <length> doc-w: root.tiny ? root.win-w : min(560px * Theme.scale, max(260px, root.win-w * 0.36));
+    property <length> doc-content-w: (root.tiny ? root.win-w : root.doc-w) - 40px * Theme.scale;
+    property <length> graph-panel-w: min(330px * Theme.scale, max(220px, root.win-w * 0.36));
+    property <length> tablet-w: min(320px * Theme.scale, max(220px, root.win-w * 0.34));
+
+    // ---- modes
+    in-out property <bool> focus-mode: false;
+    in-out property <bool> present-mode: false;
+    in-out property <string> overlay: "";       // palette | switcher | symbols | settings | shortcuts | trash | history | backups | prompt | split-pick | colors
+    in-out property <bool> show-sidebar: true;
+    in-out property <bool> show-doc: true;
+    in-out property <bool> show-sliders: true;
+    in-out property <bool> show-find: false;
+    in-out property <string> drag-src;
+    in property <data-transfer> drag-data;
+
     // ---- ink canvas
     in property <image> frame;
     in property <string> tool: "pen";
@@ -88,17 +213,64 @@ export component MainWindow inherits Window {
     in property <string> train-label;
     in property <string> train-info;
     in property <string> paper-name: "Lined";
+    in property <string> page-mode-name: "Infinite";
     in property <float> paper-spacing: 32;
+    in property <[SwatchRow]> swatches;
+    in property <[SwatchRow]> pens;
+    in property <int> active-pen: -1;
+    in property <bool> has-selection: false;
+    in property <bool> recording: false;
+    in property <bool> has-audio: false;
+    in property <bool> snap-shapes: true;
     // ---- notes
-    in-out property <bool> show-sidebar: true;
     in property <[PageRow]> pages;
     in property <[PageRow]> search-results;
     in property <bool> search-active: false;
     in property <string> page-title;
+    in property <bool> page-favorite: false;
+    in property <string> page-tags;
     in property <[string]> templates;
     in property <[string]> export-formats;
+    in property <[string]> notebooks;
+    in property <int> notebook-index: 0;
+    in property <[string]> filters: ["All pages", "Favourites", "Recent"];
+    in-out property <int> filter-index: 0;
+    in property <[TabRow]> tabs;
+    in property <bool> can-back: false;
+    in property <bool> can-forward: false;
+    // ---- page document (typeset blocks)
+    in property <[BlockRow]> blocks;
+    in property <string> word-count;
+    in property <[ItemRow]> outline;
+    in property <[ItemRow]> backlinks;
+    in property <[ItemRow]> spelling;
+    in-out property <string> editor-text;
+    in property <int> editing-index: -1;
+    in property <string> find-info;
+    in property <bool> split-active: false;
+    in property <string> split-title;
+    in property <[BlockRow]> split-blocks;
     // ---- typing
     in property <bool> typing: false;
+    in property <[ItemRow]> suggestions;
+    // ---- overlays
+    in property <[CmdRow]> commands;
+    in property <[ItemRow]> items;            // switcher / trash / history / backups / split-pick
+    in property <[SymRow]> symbols;
+    in property <string> items-hint;
+    in property <string> prompt-title;
+    in property <string> prompt-hint;
+    in property <bool> prompt-password: false;
+    in property <image> preview-image;
+    in property <bool> has-preview: false;
+    // ---- settings
+    in property <string> theme-name: "dark";
+    in property <float> ui-scale: 1.0;
+    in property <bool> tablet-mode: false;
+    in property <bool> spell-check: true;
+    in property <bool> backup-daily: true;
+    in property <string> backup-info;
+    in property <string> rebinding;           // command id waiting for a key, or ""
     // ---- graph
     in property <bool> graph-mode: false;
     in property <image> graph-frame;
@@ -106,7 +278,7 @@ export component MainWindow inherits Window {
     in property <[ParamRow]> graph-params;
     in property <string> graph-info;
     in property <string> graph-out;
-    in property <string> graph-default-text: "y = a sin(x)\na = 2";
+    in-out property <string> graph-text: "y = a sin(x)\na = 2";
     // ---- tablet
     in-out property <bool> show-tablet: false;
     in property <bool> tablet-running: false;
@@ -117,6 +289,10 @@ export component MainWindow inherits Window {
     in property <[DeviceRow]> tablet-pending;
     in property <[DeviceRow]> tablet-devices;
 
+    callback window-resized(length, length);
+    callback shortcut(string, bool, bool, bool, bool) -> bool;   // key, ctrl, alt, shift, meta
+    callback plain-key(string) -> bool;
+    callback run-command(string);
     callback canvas-resized(length, length);
     callback pointer-down(length, length);
     callback pointer-move(length, length);
@@ -126,31 +302,57 @@ export component MainWindow inherits Window {
     callback set-tool(string);
     callback set-mode(string);
     callback toggle-pixel-erase();
-    callback undo();
-    callback redo();
-    callback clear-all();
     callback set-smoothing(float);
     callback set-width(float);
-    callback set-color(int);
-    callback recognize-now();
+    callback set-swatch(int);
+    callback set-custom-color(int, int, int);
+    callback use-pen(int);
+    callback save-pen(int);
     callback pen-lifted();
     callback set-delay(float);
     callback choose(int);
-    callback cycle-paper();
     callback set-spacing(float);
-    callback toggle-training();
+    callback set-paper-color(int);
     callback train-step(int);
     callback train-unfilled();
     callback open-page(string);
     callback new-page(string);
-    callback delete-page();
     callback do-search(string);
     callback rename-page(string);
+    callback set-tags(string);
     callback export-page(string);
-    callback toggle-typing();
+    callback set-notebook(int);
+    callback set-filter(int);
+    callback move-row(string, int);          // page id, direction (-1 up, +1 down)
+    callback drop-row(string, string);       // dragged page id, target row id (page or section)
+    callback open-tab(string);
+    callback close-tab(string);
     callback type-text(string);
     callback type-nav(string);
-    callback toggle-graph();
+    callback type-paste(string);
+    callback accept-suggestion(string);
+    // page blocks
+    callback block-action(int, string);       // index, "up" | "down" | "edit" | "delete" | "copy-latex" | "copy-typst" | "copy-image" | "wider" | "narrower" | "crop"
+    callback editor-format(string);
+    callback editor-commit();
+    callback editor-cancel();
+    callback fix-spelling(string, string);
+    callback find-replace(string, string, bool);   // find, replace, do-replace
+    callback goto-item(string);
+    // overlays
+    callback overlay-query(string);
+    callback overlay-pick(string);
+    callback overlay-closed();
+    callback prompt-ok(string);
+    callback insert-symbol(string);
+    callback start-rebind(string);
+    callback reset-shortcuts();
+    // settings
+    callback set-theme(string);
+    callback set-ui-scale(float);
+    callback set-custom-theme(string, int, int, int);
+    callback toggle-setting(string);
+    // graph
     callback graph-text-edited(string);
     callback graph-set-param(string, float);
     callback graph-pointer(int, length, length);
@@ -158,6 +360,7 @@ export component MainWindow inherits Window {
     callback graph-resized(length, length);
     callback graph-run-matlab(string);
     callback graph-load-mat(string);
+    // tablet
     callback tablet-toggle();
     callback tablet-setup();
     callback tablet-new-pair();
@@ -166,8 +369,27 @@ export component MainWindow inherits Window {
     callback tablet-revoke(string);
     callback tablet-revoke-all();
 
-    FocusScope {
+    public function close-overlay() {
+        root.overlay = "";
+        root.overlay-closed();
+        fs.focus();
+    }
+    public function focus-canvas() { fs.focus(); }
+
+    fs := FocusScope {
         init => { self.focus(); }
+        // Shortcuts with a modifier or a function key work everywhere, even while a text box has focus.
+        capture-key-pressed(e) => {
+            if root.rebinding != "" {
+                if root.shortcut(e.text, e.modifiers.control, e.modifiers.alt, e.modifiers.shift, e.modifiers.meta) { return accept; }
+                return accept;
+            }
+            if e.text == Key.Escape && root.overlay != "" { root.close-overlay(); return accept; }
+            if e.modifiers.control || e.modifiers.alt || e.modifiers.meta || (e.text >= Key.F1 && e.text <= Key.F24) {
+                if root.shortcut(e.text, e.modifiers.control, e.modifiers.alt, e.modifiers.shift, e.modifiers.meta) { return accept; }
+            }
+            reject
+        }
         key-pressed(e) => {
             if root.typing {
                 if e.text == Key.Backspace { root.type-nav("backspace"); return accept; }
@@ -176,157 +398,249 @@ export component MainWindow inherits Window {
                 if e.text == Key.LeftArrow { root.type-nav("left"); return accept; }
                 if e.text == Key.RightArrow { root.type-nav("right"); return accept; }
                 if e.text == Key.Return { root.type-nav("enter"); return accept; }
-                if e.text == Key.Escape { root.toggle-typing(); return accept; }
+                if e.text == Key.Escape { root.run-command("typing"); return accept; }
                 if !e.modifiers.control && !e.modifiers.alt && !e.modifiers.meta && e.text.character-count == 1 { root.type-text(e.text); return accept; }
             }
-            if e.modifiers.control && e.text == "z" { root.undo(); root.pen-lifted(); return accept; }
-            if e.modifiers.control && e.text == "y" { root.redo(); root.pen-lifted(); return accept; }
+            if e.text == Key.Escape && (root.focus-mode || root.present-mode) { root.run-command(root.present-mode ? "present" : "focus"); return accept; }
             if !root.typing && !e.modifiers.control && !e.modifiers.alt && !e.modifiers.meta {
                 if e.text == "1" { root.choose(0); return accept; }
                 if e.text == "2" { root.choose(1); return accept; }
                 if e.text == "3" { root.choose(2); return accept; }
                 if e.text == "4" { root.choose(3); return accept; }
                 if e.text == "5" { root.choose(4); return accept; }
+                if root.plain-key(e.text) { return accept; }
             }
             reject
         }
 
         VerticalLayout {
             // ---- row 1: ink tools
-            Rectangle {
+            if !root.focus-mode && !root.present-mode : Rectangle {
                 background: Theme.surface;
-                height: 56px;
+                height: Theme.hit + 16px * Theme.scale;
                 ScrollRow {
+                    ToolButton { label: "☰ Commands"; tip: "Command palette (Ctrl+K): every action, searchable"; clicked => { root.run-command("palette"); } }
                     ToolButton { label: "Pen"; active: root.tool == "pen"; clicked => { root.set-tool("pen"); } }
                     ToolButton { label: "Highlight"; active: root.tool == "highlighter"; clicked => { root.set-tool("highlighter"); } }
                     ToolButton { label: "Eraser"; active: root.tool == "eraser"; clicked => { root.set-tool("eraser"); } }
-                    ToolButton { label: root.pixel-erase ? "Pixel" : "Stroke"; clicked => { root.toggle-pixel-erase(); } }
-                    Rectangle { width: 8px; }
+                    if root.tool == "eraser" : ToolButton { label: root.pixel-erase ? "Erase: part" : "Erase: stroke"; clicked => { root.toggle-pixel-erase(); } }
+                    ToolButton { label: "Lasso"; active: root.tool == "lasso"; tip: "Lasso: circle ink to select, then drag it to move"; clicked => { root.set-tool("lasso"); } }
+                    if root.has-selection : ToolButton { label: "Delete sel."; urgent: true; clicked => { root.run-command("delete-selection"); } }
+                    Rectangle { width: 6px; }
                     ToolButton { label: "Math/Text"; active: root.mode == "math"; clicked => { root.set-mode("math"); } }
                     ToolButton { label: "Drawing"; active: root.mode == "drawing"; clicked => { root.set-mode("drawing"); } }
-                    Rectangle { width: 8px; }
-                    ToolButton { label: "Undo"; enabled: root.can-undo; clicked => { root.undo(); root.pen-lifted(); } }
-                    ToolButton { label: "Redo"; enabled: root.can-redo; clicked => { root.redo(); root.pen-lifted(); } }
-                    ToolButton { label: "Clear"; clicked => { root.clear-all(); root.pen-lifted(); } }
-                    ToolButton { label: "Recognize"; clicked => { root.recognize-now(); } }
-                    ToolButton { label: "Type"; active: root.typing; clicked => { root.toggle-typing(); } }
-                    ToolButton { label: "Train"; active: root.training; clicked => { root.toggle-training(); } }
-                    ToolButton { label: "Paper: " + root.paper-name; clicked => { root.cycle-paper(); } }
+                    Rectangle { width: 6px; }
+                    ToolButton { label: "Undo"; enabled: root.can-undo; clicked => { root.run-command("undo"); } }
+                    ToolButton { label: "Redo"; enabled: root.can-redo; clicked => { root.run-command("redo"); } }
+                    ToolButton { label: "Recognize"; clicked => { root.run-command("recognize"); } }
+                    ToolButton { label: "Insert ↵"; tip: "Insert the expression into the page (Ctrl+Enter)"; clicked => { root.run-command("insert"); } }
+                    ToolButton { label: "Type"; active: root.typing; clicked => { root.run-command("typing"); } }
+                    ToolButton { label: "Symbols"; clicked => { root.run-command("symbols"); } }
+                    ToolButton { label: "Train"; active: root.training; clicked => { root.run-command("train"); } }
+                    ToolButton { label: "Clear"; clicked => { root.run-command("clear"); } }
                 }
             }
             // ---- row 2: notes + modes
-            Rectangle {
-                background: #1f2335;
-                height: 52px;
+            if !root.focus-mode && !root.present-mode : Rectangle {
+                background: Theme.panel;
+                height: Theme.hit + 12px * Theme.scale;
                 ScrollRow {
-                    ToolButton { label: "Notes"; active: root.show-sidebar; clicked => { root.show-sidebar = !root.show-sidebar; } }
-                    page-title-edit := LineEdit {
-                        width: 220px;
+                    ToolButton { label: "Notes"; active: root.show-sidebar; clicked => { root.run-command("toggle-sidebar"); } }
+                    ToolButton { label: "◀"; tip: "Back (Alt+Left)"; enabled: root.can-back; clicked => { root.run-command("back"); } }
+                    ToolButton { label: "▶"; tip: "Forward (Alt+Right)"; enabled: root.can-forward; clicked => { root.run-command("forward"); } }
+                    LineEdit {
+                        width: 200px * Theme.scale;
+                        height: Theme.hit;
                         text: root.page-title;
                         placeholder-text: "Page title";
-                        accepted(t) => { root.rename-page(t); }
+                        accepted(t) => { root.rename-page(t); fs.focus(); }
+                        edited(t) => { root.rename-page(t); }
                     }
-                    tmpl := ComboBox { width: 150px; model: root.templates; current-index: 1; }
+                    ToolButton { label: root.page-favorite ? "★" : "☆"; tip: "Favourite"; active: root.page-favorite; clicked => { root.run-command("favorite"); } }
+                    tmpl := ComboBox { width: 150px * Theme.scale; height: Theme.hit; model: root.templates; current-index: 1; }
                     ToolButton { label: "+ Page"; clicked => { root.new-page(tmpl.current-value); } }
-                    ToolButton { label: "Delete"; clicked => { root.delete-page(); } }
-                    Rectangle { width: 8px; }
-                    exp := ComboBox { width: 120px; model: root.export-formats; current-index: 0; }
+                    ToolButton { label: "Page"; active: root.show-doc; tip: "Show the typeset page"; clicked => { root.run-command("toggle-doc"); } }
+                    exp := ComboBox { width: 120px * Theme.scale; height: Theme.hit; model: root.export-formats; current-index: 0; }
                     ToolButton { label: "Export"; clicked => { root.export-page(exp.current-value); } }
-                    Rectangle { width: 8px; }
-                    ToolButton { label: "Graph"; active: root.graph-mode; clicked => { root.toggle-graph(); } }
-                    ToolButton { label: root.tablet-running ? "Tablet: ON" : "Tablet"; active: root.show-tablet; urgent: root.tablet-running; clicked => { root.show-tablet = !root.show-tablet; } }
+                    ToolButton { label: "Graph"; active: root.graph-mode; clicked => { root.run-command("graph"); } }
+                    ToolButton { label: root.recording ? "■ Stop rec" : "● Record"; urgent: root.recording; clicked => { root.run-command("record"); } }
+                    ToolButton { label: root.tablet-running ? "Tablet: ON" : "Tablet"; active: root.show-tablet; urgent: root.tablet-running; clicked => { root.run-command("tablet"); } }
+                    ToolButton { label: "Settings"; clicked => { root.run-command("settings"); } }
+                    ToolButton { label: root.show-sliders ? "▴" : "▾"; tip: "Show or hide the pen and paper controls"; clicked => { root.show-sliders = !root.show-sliders; } }
                 }
             }
-            // ---- row 3: sliders + status
-            Rectangle {
+            // ---- row 3: colours, favourite pens, sliders
+            if !root.focus-mode && !root.present-mode && root.show-sliders && !root.short : Rectangle {
                 background: Theme.surface;
-                height: 44px;
+                height: Theme.hit + 12px * Theme.scale;
                 ScrollRow {
-                    for c[i] in [#c0caf5, #f7768e, #9ece6a, #7aa2f7, #e0af68, #bb9af7] : Rectangle {
-                        width: 28px; height: 28px; border-radius: 14px; background: c; y: 8px;
-                        TouchArea { clicked => { root.set-color(i); } }
+                    for c[i] in root.swatches : Rectangle {
+                        width: Theme.hit; height: Theme.hit; border-radius: self.width / 2;
+                        background: rgb(c.r, c.g, c.b);
+                        border-width: c.active ? 3px : 1px; border-color: c.active ? Theme.accent : Theme.muted;
+                        accessible-role: button; accessible-label: "Colour " + (i + 1);
+                        TouchArea { clicked => { root.set-swatch(i); } }
                     }
-                    Text { text: "Smoothing " + Math.round(root.smoothing * 100) + "%"; color: Theme.text; vertical-alignment: center; }
-                    Slider { width: 90px; minimum: 0; maximum: 1; value: root.smoothing; changed(v) => { root.set-smoothing(v); } }
-                    Text { text: "Width " + Math.round(root.stroke-width * 10) / 10; color: Theme.text; vertical-alignment: center; }
-                    Slider { width: 90px; minimum: 0.5; maximum: 24; value: root.stroke-width; changed(v) => { root.set-width(v); } }
-                    Text { text: "Spacing " + Math.round(root.paper-spacing); color: Theme.text; vertical-alignment: center; }
-                    Slider { width: 80px; minimum: 12; maximum: 96; value: root.paper-spacing; changed(v) => { root.set-spacing(v); } }
-                    Text { text: "Recognize after " + Math.round(root.recog-delay) + " ms"; color: Theme.text; vertical-alignment: center; }
-                    Slider { width: 90px; minimum: 200; maximum: 2000; value: root.recog-delay; changed(v) => { root.set-delay(v); } }
-                    Text { text: root.status; color: Theme.accent; vertical-alignment: center; }
+                    ToolButton { label: "+ Colour"; clicked => { root.overlay = "colors"; } }
+                    for p[i] in root.pens : Rectangle {
+                        width: Theme.hit * 1.6; height: Theme.hit; border-radius: 6px;
+                        background: i == root.active-pen ? Theme.accent : Theme.panel;
+                        accessible-role: button; accessible-label: "Favourite pen " + (i + 1);
+                        HorizontalLayout {
+                            padding: 6px; spacing: 4px;
+                            Rectangle { width: 18px * Theme.scale; height: 18px * Theme.scale; y: (parent.height - self.height) / 2; border-radius: 9px * Theme.scale; background: rgb(p.r, p.g, p.b); }
+                            Text { text: "Pen " + (i + 1); color: i == root.active-pen ? Theme.on-accent : Theme.text; font-size: Theme.fs-small; vertical-alignment: center; }
+                        }
+                        TouchArea { clicked => { root.use-pen(i); } }
+                    }
+                    BigSlider { label: "Smooth"; display: Math.round(root.smoothing * 100) + "%"; value: root.smoothing; minimum: 0; maximum: 1; step: 0.05; changed(v) => { root.set-smoothing(v); } }
+                    BigSlider { label: "Width"; display: Math.round(root.stroke-width * 10) / 10; value: root.stroke-width; minimum: 0.5; maximum: 24; step: 0.5; changed(v) => { root.set-width(v); } }
+                    BigSlider { label: "Recognize after"; display: Math.round(root.recog-delay) + " ms"; value: root.recog-delay; minimum: 200; maximum: 3000; step: 100; changed(v) => { root.set-delay(v); } }
+                    ToolButton { label: "Paper: " + root.paper-name; clicked => { root.run-command("paper"); } }
+                    BigSlider { label: "Spacing"; display: Math.round(root.paper-spacing); value: root.paper-spacing; minimum: 12; maximum: 96; step: 4; changed(v) => { root.set-spacing(v); } }
+                    ToolButton { label: "Size: " + root.page-mode-name; clicked => { root.run-command("page-mode"); } }
                 }
             }
             // ---- candidate strip / typing / training
-            Rectangle {
-                background: #1f2335;
-                height: 64px;
-                ScrollRow {
-                    if !root.training : HorizontalLayout {
-                        spacing: 6px;
-                        Text { text: root.typing ? "Typing (Esc to stop)" : "Candidates"; color: root.typing ? Theme.urgent : Theme.muted; vertical-alignment: center; }
-                        for c[i] in root.candidates : Rectangle {
-                            width: 72px; height: 48px; border-radius: 6px;
-                            background: cta.has-hover ? #2f354d : Theme.surface;
-                            Text { x: 6px; y: 4px; text: i + 1; color: Theme.muted; font-size: 11px; }
-                            Text { text: c; color: i == 0 ? Theme.accent : Theme.text; font-size: 26px; horizontal-alignment: center; vertical-alignment: center; }
-                            cta := TouchArea { clicked => { root.choose(i); } }
+            if !root.present-mode : Rectangle {
+                background: Theme.panel;
+                height: (root.typing && root.suggestions.length > 0 ? 2 : 1) * (Theme.hit + 24px * Theme.scale);
+                VerticalLayout {
+                    ScrollRow {
+                        if !root.training : HorizontalLayout {
+                            spacing: 6px * Theme.scale;
+                            Text { text: root.typing ? "Typing (Esc stops)" : root.focus-mode ? "" : "Candidates"; color: root.typing ? Theme.urgent : Theme.muted; vertical-alignment: center; font-size: Theme.fs-small; }
+                            for c[i] in root.candidates : Rectangle {
+                                width: 64px * Theme.scale; height: Theme.hit + 8px * Theme.scale; border-radius: 6px;
+                                background: cta.has-hover ? Theme.hover : Theme.surface;
+                                border-width: i == 0 ? 2px : 0px; border-color: Theme.accent;
+                                accessible-role: button; accessible-label: "Candidate " + (i + 1) + ": " + c;
+                                Text { x: 5px; y: 3px; text: i + 1; color: Theme.muted; font-size: 10px * Theme.scale; }
+                                Text { text: c; color: i == 0 ? Theme.accent : Theme.text; font-size: 24px * Theme.scale; horizontal-alignment: center; vertical-alignment: center; }
+                                cta := TouchArea { clicked => { root.choose(i); } }
+                            }
+                            if root.has-expr-image : Image { source: root.expr-image; height: Theme.hit + 4px; image-fit: contain; }
+                            Text { text: root.expr-text; color: Theme.text; vertical-alignment: center; }
+                            if root.typing : LineEdit {
+                                width: 220px * Theme.scale; height: Theme.hit;
+                                placeholder-text: "Paste / IME: Typst or LaTeX, Enter";
+                                accepted(t) => { root.type-paste(t); self.text = ""; fs.focus(); }
+                            }
                         }
-                        if root.has-expr-image : Image { source: root.expr-image; height: 48px; image-fit: contain; }
-                        Text { text: root.expr-text; color: Theme.text; vertical-alignment: center; }
+                        if root.training : HorizontalLayout {
+                            spacing: 8px * Theme.scale;
+                            ToolButton { label: "◀"; clicked => { root.train-step(-1); } }
+                            Text { text: root.train-label; color: Theme.accent; font-size: 30px * Theme.scale; vertical-alignment: center; min-width: 48px; horizontal-alignment: center; }
+                            ToolButton { label: "▶"; clicked => { root.train-step(1); } }
+                            ToolButton { label: "Next unfilled"; clicked => { root.train-unfilled(); } }
+                            ToolButton { label: "Done"; clicked => { root.run-command("train"); } }
+                            Text { text: "Draw this symbol, then pause: " + root.train-info; color: Theme.text; vertical-alignment: center; }
+                        }
                     }
-                    if root.training : HorizontalLayout {
-                        spacing: 8px;
-                        ToolButton { label: "<"; clicked => { root.train-step(-1); } }
-                        Text { text: root.train-label; color: Theme.accent; font-size: 30px; vertical-alignment: center; min-width: 48px; horizontal-alignment: center; }
-                        ToolButton { label: ">"; clicked => { root.train-step(1); } }
-                        ToolButton { label: "Next unfilled"; clicked => { root.train-unfilled(); } }
-                        Text { text: "Draw this symbol, then pause: " + root.train-info; color: Theme.text; vertical-alignment: center; }
+                    if root.typing && root.suggestions.length > 0 : ScrollRow {
+                        Text { text: "Suggestions"; color: Theme.muted; font-size: Theme.fs-small; vertical-alignment: center; }
+                        for s in root.suggestions : ToolButton { label: s.title + "  " + s.detail; tip: "Insert " + s.title; clicked => { root.accept-suggestion(s.id); } }
+                    }
+                }
+            }
+            // ---- tabs
+            if root.tabs.length > 1 && !root.present-mode && !root.focus-mode : Rectangle {
+                background: Theme.bg;
+                height: Theme.hit + 6px;
+                ScrollRow {
+                    pad: 3px;
+                    for t in root.tabs : Rectangle {
+                        height: Theme.hit; border-radius: 6px;
+                        min-width: tt.preferred-width + Theme.hit + 24px;
+                        background: t.current ? Theme.surface : tta.has-hover ? Theme.hover : Theme.panel;
+                        border-width: t.current ? 2px : 0px; border-color: Theme.accent;
+                        tta := TouchArea { clicked => { root.open-tab(t.id); } }
+                        HorizontalLayout {
+                            padding-left: 10px; spacing: 4px;
+                            tt := Text { text: t.title; color: Theme.text; vertical-alignment: center; overflow: elide; max-width: 200px * Theme.scale; }
+                            Rectangle {
+                                width: Theme.hit;
+                                Text { text: "✕"; color: Theme.muted; horizontal-alignment: center; vertical-alignment: center; }
+                                TouchArea { clicked => { root.close-tab(t.id); } }
+                            }
+                        }
                     }
                 }
             }
             // ---- main area
             HorizontalLayout {
                 // sidebar
-                if root.show-sidebar && !root.tiny && !(root.graph-mode && root.win-w < 1150px) : Rectangle {
+                if root.show-sidebar && !root.tiny && !root.focus-mode && !root.present-mode && !(root.graph-mode && root.win-w < 1150px) : Rectangle {
                     width: root.sidebar-w;
-                    background: #1f2335;
+                    background: Theme.panel;
                     VerticalLayout {
-                        padding: 8px; spacing: 6px;
+                        padding: 8px * Theme.scale; spacing: 6px * Theme.scale;
+                        HorizontalLayout {
+                            spacing: 4px;
+                            ComboBox { height: Theme.hit; model: root.notebooks; current-index: root.notebook-index; selected => { root.set-notebook(self.current-index); } }
+                            ToolButton { label: "+"; tip: "New notebook"; clicked => { root.run-command("new-notebook"); } }
+                        }
                         LineEdit {
-                            placeholder-text: "Search all pages";
+                            height: Theme.hit;
+                            placeholder-text: "Search all pages (tag:x, after:2026-01-01)";
                             edited(t) => { root.do-search(t); }
                         }
-                        Text { text: root.search-active ? "Search results" : "Pages"; color: Theme.muted; font-size: 12px; }
+                        ComboBox { height: Theme.hit; model: root.filters; current-index: root.filter-index; selected => { root.set-filter(self.current-index); } }
+                        HorizontalLayout {
+                            spacing: 4px;
+                            alignment: start;
+                            ToolButton { label: "+ Section"; clicked => { root.run-command("new-section"); } }
+                            ToolButton { label: "Trash"; clicked => { root.run-command("trash"); } }
+                            ToolButton { label: "History"; tip: "Version history of this page"; clicked => { root.run-command("history"); } }
+                        }
+                        SectionTitle { text: root.search-active ? "Search results" : "Drag pages to reorder or move between sections; ▲▼ also work"; wrap: word-wrap; }
                         ScrollView {
                             VerticalLayout {
                                 spacing: 3px;
+                                alignment: start;
                                 for p in (root.search-active ? root.search-results : root.pages) : Rectangle {
-                                    height: p.detail == "" ? 38px : 58px;
+                                    height: p.is-section ? Theme.hit : (p.detail == "" ? Theme.hit + 4px : Theme.hit + 26px * Theme.scale);
                                     border-radius: 6px;
-                                    background: p.current ? Theme.accent : pa.has-hover ? #2f354d : Theme.surface;
-                                    VerticalLayout {
-                                        padding-left: 10px; padding-right: 6px; padding-top: 4px;
-                                        Text { text: p.title; color: p.current ? Theme.bg : Theme.text; overflow: elide; }
-                                        if p.detail != "" : Text { text: p.detail; color: p.current ? Theme.bg : Theme.muted; font-size: 11px; wrap: word-wrap; overflow: elide; }
+                                    background: p.is-section ? (da.has-drag ? Theme.hover : transparent) : da.has-drag ? Theme.hover : p.current ? Theme.accent : pa.has-hover ? Theme.hover : Theme.surface;
+                                    da := DropArea {
+                                        can-drop(e) => { return DragAction.move; }
+                                        dropped(e) => { root.drop-row(root.drag-src, p.id); return DragAction.move; }
                                     }
-                                    pa := TouchArea { clicked => { root.open-page(p.id); } }
+                                    DragArea {
+                                        enabled: !p.is-section && !root.search-active;
+                                        data: root.drag-data;
+                                        allow-move: true;
+                                        changed dragging => { if self.dragging { root.drag-src = p.id; } }
+                                        pa := TouchArea { clicked => { if !p.is-section { root.open-page(p.id); } } }
+                                    }
+                                    HorizontalLayout {
+                                        padding-left: p.is-section ? 4px : 10px; padding-right: 4px; spacing: 2px;
+                                        VerticalLayout {
+                                            alignment: center;
+                                            Text { text: (p.favorite ? "★ " : "") + p.title; color: p.is-section ? Theme.muted : p.current ? Theme.on-accent : Theme.text; font-weight: p.is-section ? 700 : 400; overflow: elide; }
+                                            if p.detail != "" && !p.is-section : Text { text: p.detail; color: p.current ? Theme.on-accent : Theme.muted; font-size: Theme.fs-small; overflow: elide; }
+                                        }
+                                        if !p.is-section && !root.search-active && (pa.has-hover || p.current) : ToolButton { label: "▲"; tip: "Move up"; clicked => { root.move-row(p.id, -1); } }
+                                        if !p.is-section && !root.search-active && (pa.has-hover || p.current) : ToolButton { label: "▼"; tip: "Move down"; clicked => { root.move-row(p.id, 1); } }
+                                    }
                                 }
                             }
                         }
                     }
                 }
                 // content: ink canvas or graph
-                if !root.graph-mode : canvas := Rectangle {
+                if !root.graph-mode && !(root.tiny && root.show-doc && !root.present-mode) : canvas := Rectangle {
                     background: Theme.bg;
                     clip: true;
                     changed width => { root.canvas-resized(self.width, self.height); }
                     changed height => { root.canvas-resized(self.width, self.height); }
-                    Image { source: root.frame; width: parent.width; height: parent.height; image-fit: fill; }
+                    init => { root.canvas-resized(self.width, self.height); }
+                    Image { source: root.frame; width: parent.width; height: parent.height; image-fit: fill; accessible-role: image; accessible-label: "Ink canvas"; }
                     TouchArea {
+                        mouse-cursor: root.tool == "lasso" ? move : crosshair;
                         pointer-event(e) => {
                             if e.kind == PointerEventKind.down {
-                                if e.button == PointerEventButton.left { root.pointer-down(self.mouse-x, self.mouse-y); }
+                                if e.button == PointerEventButton.left { root.pointer-down(self.mouse-x, self.mouse-y); fs.focus(); }
                             } else if e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel {
                                 root.pointer-up();
                             }
@@ -338,39 +652,143 @@ export component MainWindow inherits Window {
                             accept
                         }
                     }
+                    if root.focus-mode || root.present-mode : ToolButton { x: parent.width - self.width - 8px; y: 8px; label: "Exit (Esc)"; clicked => { root.run-command(root.present-mode ? "present" : "focus"); } }
+                }
+                // page document: typeset blocks, editor, outline, backlinks
+                if root.show-doc && !root.graph-mode : Rectangle {
+                    width: root.tiny || (root.present-mode && root.split-active == false && root.focus-mode == false && false) ? root.win-w : root.doc-w;
+                    background: Theme.panel;
+                    VerticalLayout {
+                        padding: 8px * Theme.scale; spacing: 6px * Theme.scale;
+                        HorizontalLayout {
+                            spacing: 4px * Theme.scale;
+                            Text { text: root.split-active ? "Split: " + root.split-title : "Page  ·  " + root.word-count; color: Theme.muted; font-size: Theme.fs-small; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+                            if root.split-active : ToolButton { label: "Close split"; clicked => { root.run-command("split-close"); } }
+                            if root.tiny : ToolButton { label: "Ink"; tip: "Back to the ink canvas"; clicked => { root.run-command("toggle-doc"); } }
+                            ToolButton { label: "Find"; active: root.show-find; clicked => { root.show-find = !root.show-find; } }
+                        }
+                        if root.show-find : VerticalLayout {
+                            spacing: 4px;
+                            HorizontalLayout { spacing: 4px; findt := LineEdit { height: Theme.hit; placeholder-text: "Find"; edited(t) => { root.find-replace(t, rept.text, false); } } rept := LineEdit { height: Theme.hit; placeholder-text: "Replace with"; } }
+                            HorizontalLayout { spacing: 4px; Text { text: root.find-info; color: Theme.accent; font-size: Theme.fs-small; vertical-alignment: center; horizontal-stretch: 1; } ToolButton { label: "Replace all"; clicked => { root.find-replace(findt.text, rept.text, true); } } }
+                        }
+                        ScrollView {
+                            vertical-stretch: 1;
+                            VerticalLayout {
+                                spacing: 4px * Theme.scale;
+                                alignment: start;
+                                if (root.split-active ? root.split-blocks : root.blocks).length == 0 : Text {
+                                    text: "Nothing typeset yet. Write math on the canvas and press Insert ↵, or add text below.";
+                                    color: Theme.muted; wrap: word-wrap; font-size: Theme.fs-small;
+                                }
+                                for b in (root.split-active ? root.split-blocks : root.blocks) : Rectangle {
+                                    background: b.idx == root.editing-index ? Theme.hover : bta.has-hover ? Theme.surface : transparent;
+                                    border-radius: 6px;
+                                    min-height: Theme.hit;
+                                    bta := TouchArea { }
+                                    VerticalLayout {
+                                        padding: 4px;
+                                        if b.has-image : Image { source: b.image; width: root.doc-content-w; image-fit: contain; horizontal-alignment: left; }
+                                        if !b.has-image : Text { text: b.error != "" ? "⚠ " + b.error + "\n" + b.text : b.text; color: b.error != "" ? Theme.urgent : Theme.text; wrap: word-wrap; }
+                                        if !root.split-active && (bta.has-hover || b.idx == root.editing-index) : HorizontalLayout {
+                                            spacing: 3px; alignment: end;
+                                            ToolButton { label: "▲"; tip: "Move up"; clicked => { root.block-action(b.idx, "up"); } }
+                                            ToolButton { label: "▼"; tip: "Move down"; clicked => { root.block-action(b.idx, "down"); } }
+                                            if b.kind == "text" || b.kind == "callout" || b.kind == "math" : ToolButton { label: "Edit"; clicked => { root.block-action(b.idx, "edit"); } }
+                                            if b.kind == "math" : ToolButton { label: "LaTeX"; tip: "Copy as LaTeX"; clicked => { root.block-action(b.idx, "copy-latex"); } }
+                                            if b.kind == "math" : ToolButton { label: "Typst"; tip: "Copy as Typst"; clicked => { root.block-action(b.idx, "copy-typst"); } }
+                                            if b.kind == "image" : ToolButton { label: "−"; tip: "Smaller"; clicked => { root.block-action(b.idx, "narrower"); } }
+                                            if b.kind == "image" : ToolButton { label: "+"; tip: "Larger"; clicked => { root.block-action(b.idx, "wider"); } }
+                                            if b.kind == "image" : ToolButton { label: "Crop"; tip: "Trim 5% from every side (repeat); Edit resets"; clicked => { root.block-action(b.idx, "crop"); } }
+                                            if b.kind == "image" : ToolButton { label: "Uncrop"; clicked => { root.block-action(b.idx, "uncrop"); } }
+                                            ToolButton { label: "✕"; tip: "Delete block"; clicked => { root.block-action(b.idx, "delete"); } }
+                                        }
+                                    }
+                                }
+                                if root.outline.length > 0 && !root.split-active : SectionTitle { text: "Outline"; }
+                                for o in root.outline : ToolButton { label: o.title; tip: "Heading"; clicked => { root.goto-item(o.id); } }
+                                if root.backlinks.length > 0 && !root.split-active : SectionTitle { text: "Linked from"; }
+                                for o in root.backlinks : ToolButton { label: "← " + o.title; clicked => { root.open-page(o.id); } }
+                            }
+                        }
+                        if !root.split-active && !root.present-mode : VerticalLayout {
+                            spacing: 4px * Theme.scale;
+                            ScrollRow {
+                                pad: 0px;
+                                ToolButton { label: "H1"; tip: "Heading"; clicked => { root.editor-format("h1"); } }
+                                ToolButton { label: "H2"; tip: "Subheading"; clicked => { root.editor-format("h2"); } }
+                                ToolButton { label: "B"; tip: "Bold"; clicked => { root.editor-format("bold"); } }
+                                ToolButton { label: "I"; tip: "Italic"; clicked => { root.editor-format("italic"); } }
+                                ToolButton { label: "•"; tip: "Bullet list"; clicked => { root.editor-format("list"); } }
+                                ToolButton { label: "1."; tip: "Numbered list"; clicked => { root.editor-format("numbered"); } }
+                                ToolButton { label: "Table"; clicked => { root.editor-format("table"); } }
+                                ToolButton { label: "Code"; clicked => { root.editor-format("code"); } }
+                                ToolButton { label: "Quote"; clicked => { root.editor-format("quote"); } }
+                                ToolButton { label: "$x$"; tip: "Inline math"; clicked => { root.editor-format("math"); } }
+                                ToolButton { label: "[[link]]"; tip: "Link to another page by title"; clicked => { root.editor-format("link"); } }
+                                ToolButton { label: "Callout"; clicked => { root.run-command("callout"); } }
+                                ToolButton { label: "―"; tip: "Horizontal rule"; clicked => { root.run-command("rule"); } }
+                                ToolButton { label: "Image"; clicked => { root.run-command("image"); } }
+                                ToolButton { label: "Plot"; clicked => { root.run-command("plot"); } }
+                            }
+                            TextEdit {
+                                height: max(90px, min(200px, root.win-h * 0.18));
+                                text <=> root.editor-text;
+                                placeholder-text: "Text block (Typst markup: = Heading, - list, *bold*, $x^2$, [[Other page]])";
+                                wrap: word-wrap;
+                            }
+                            for s in root.spelling : HorizontalLayout {
+                                spacing: 4px;
+                                Text { text: "Spelling: " + s.title; color: Theme.urgent; vertical-alignment: center; font-size: Theme.fs-small; }
+                                if s.detail != "" : ToolButton { label: "→ " + s.detail; clicked => { root.fix-spelling(s.title, s.detail); } }
+                            }
+                            HorizontalLayout {
+                                spacing: 4px; alignment: end;
+                                if root.editing-index >= 0 : ToolButton { label: "Cancel"; clicked => { root.editor-cancel(); } }
+                                ToolButton { label: root.editing-index >= 0 ? "Update block" : "Add text block"; active: true; clicked => { root.editor-commit(); } }
+                            }
+                        }
+                    }
                 }
                 if root.graph-mode : HorizontalLayout {
                     Rectangle {
                         width: root.graph-panel-w;
-                        background: #1f2335;
+                        background: Theme.panel;
+                        ScrollView {
                         VerticalLayout {
                             padding: 8px; spacing: 6px;
-                            Text { text: "Expressions (one per line)"; color: Theme.muted; font-size: 12px; }
+                            alignment: start;
+                            Text { text: "Expressions (one per line)"; color: Theme.muted; font-size: Theme.fs-small; }
                             TextEdit {
-                                height: 150px;
-                                text: root.graph-default-text;
-                                font-size: 15px;
+                                height: 150px * Theme.scale;
+                                text <=> root.graph-text;
+                                font-size: Theme.fs;
                                 edited(t) => { root.graph-text-edited(t); }
                             }
-                            for p in root.graph-params : HorizontalLayout {
-                                spacing: 6px; height: 30px;
-                                Text { text: p.name + " = " + Math.round(p.value * 100) / 100; color: Theme.text; width: 86px; vertical-alignment: center; }
-                                Slider { minimum: p.min; maximum: p.max; value: p.value; changed(v) => { root.graph-set-param(p.name, v); } }
+                            HorizontalLayout {
+                                spacing: 4px;
+                                ToolButton { label: "+ Drawn/typed"; tip: "Add the recognized or typed expression as a graph line"; clicked => { root.run-command("graph-add-expr"); } }
+                                ToolButton { label: "Save to page"; clicked => { root.run-command("save-graph"); } }
                             }
-                            Text { text: root.graph-info; color: Theme.accent; font-size: 12px; wrap: word-wrap; }
-                            Text { text: "MATLAB script (linspace, plot, .*, ...)"; color: Theme.muted; font-size: 12px; }
+                            for p in root.graph-params : BigSlider {
+                                label: p.name; display: "= " + Math.round(p.value * 100) / 100; value: p.value; minimum: p.min; maximum: p.max; step: (p.max - p.min) / 40;
+                                track-width: max(60px, root.graph-panel-w - 230px * Theme.scale);
+                                changed(v) => { root.graph-set-param(p.name, v); }
+                            }
+                            Text { text: root.graph-info; color: Theme.accent; font-size: Theme.fs-small; wrap: word-wrap; }
+                            Text { text: "MATLAB script (linspace, plot, .*, for ... end)"; color: Theme.muted; font-size: Theme.fs-small; }
                             mscript := TextEdit {
-                                height: 110px;
+                                height: 110px * Theme.scale;
                                 text: "x = linspace(0, 2*pi, 100);\ny = sin(x) .* exp(-x/4);\nplot(x, y); title('Damped sine')";
-                                font-size: 13px;
+                                font-size: Theme.fs-small;
                             }
                             HorizontalLayout {
                                 spacing: 6px;
                                 ToolButton { label: "Run"; clicked => { root.graph-run-matlab(mscript.text); } }
-                                matpath := LineEdit { placeholder-text: "path/to/data.mat"; accepted(t) => { root.graph-load-mat(t); } }
-                                ToolButton { label: "Load .mat"; clicked => { root.graph-load-mat(matpath.text); } }
+                                ToolButton { label: "Load .mat…"; clicked => { root.graph-load-mat(""); } }
                             }
-                            Text { text: root.graph-out; color: Theme.text; font-size: 12px; wrap: word-wrap; }
+                            Text { text: root.graph-out; color: Theme.text; font-size: Theme.fs-small; wrap: word-wrap; }
+                        }
                         }
                     }
                     Rectangle {
@@ -379,7 +797,7 @@ export component MainWindow inherits Window {
                         changed width => { root.graph-resized(self.width, self.height); }
                         changed height => { root.graph-resized(self.width, self.height); }
                         Image { source: root.graph-frame; width: parent.width; height: parent.height; image-fit: fill; }
-                        for l in root.graph-labels : Text { x: l.x; y: l.y; text: l.text; color: #8a93b8; font-size: 11px; }
+                        for l in root.graph-labels : Text { x: l.x; y: l.y; text: l.text; color: Theme.muted; font-size: 11px * Theme.scale; }
                         TouchArea {
                             pointer-event(e) => {
                                 if e.kind == PointerEventKind.down { root.graph-pointer(0, self.mouse-x, self.mouse-y); }
@@ -388,39 +806,45 @@ export component MainWindow inherits Window {
                             moved => { root.graph-pointer(1, self.mouse-x, self.mouse-y); }
                             scroll-event(e) => { root.graph-zoom(e.delta-y > 0 ? 1.1 : 1 / 1.1, self.mouse-x, self.mouse-y); accept }
                         }
+                        VerticalLayout {
+                            x: parent.width - self.width - 8px; y: 8px; spacing: 4px; width: Theme.hit;
+                            ToolButton { label: "+"; tip: "Zoom in"; clicked => { root.graph-zoom(1 / 1.25, parent.width / 2, parent.height / 2); } }
+                            ToolButton { label: "−"; tip: "Zoom out"; clicked => { root.graph-zoom(1.25, parent.width / 2, parent.height / 2); } }
+                        }
                     }
                 }
                 // tablet panel
-                if root.show-tablet : Rectangle {
+                if root.show-tablet && !root.present-mode : Rectangle {
                     width: root.tablet-w;
-                    background: #1f2335;
+                    background: Theme.panel;
                     ScrollView {
                         VerticalLayout {
                             padding: 10px; spacing: 8px;
-                            Text { text: "Tablet as drawing tablet"; color: Theme.text; font-size: 16px; font-weight: 700; }
+                            alignment: start;
+                            Text { text: "Tablet as drawing tablet"; color: Theme.text; font-size: Theme.fs * 1.15; font-weight: 700; wrap: word-wrap; }
                             if root.tablet-running : Rectangle {
-                                height: 44px; border-radius: 6px; background: Theme.urgent;
+                                height: Theme.hit + 8px; border-radius: 6px; background: Theme.urgent;
                                 HorizontalLayout {
-                                    padding: 6px; spacing: 6px;
-                                    Text { text: "Tablet server running"; color: Theme.bg; vertical-alignment: center; font-weight: 700; }
+                                    padding: 4px; spacing: 6px;
+                                    Text { text: "Tablet server running"; color: Theme.on-accent; vertical-alignment: center; font-weight: 700; }
                                     ToolButton { label: "Stop"; clicked => { root.tablet-toggle(); } }
                                 }
                             }
                             if !root.tablet-running : ToolButton { label: "Connect tablet"; clicked => { root.tablet-toggle(); } }
-                            Text { text: root.tablet-status; color: Theme.accent; wrap: word-wrap; font-size: 12px; }
+                            Text { text: root.tablet-status; color: Theme.accent; wrap: word-wrap; font-size: Theme.fs-small; }
                             if root.tablet-running : HorizontalLayout {
                                 spacing: 6px;
-                                ToolButton { label: "Setup (install CA)"; clicked => { root.tablet-setup(); } }
-                                ToolButton { label: "Pair device"; clicked => { root.tablet-new-pair(); } }
+                                ToolButton { label: "1. Install CA"; clicked => { root.tablet-setup(); } }
+                                ToolButton { label: "2. Pair device"; clicked => { root.tablet-new-pair(); } }
                             }
                             if root.has-qr : Image { source: root.tablet-qr; width: min(260px, root.tablet-w - 30px); height: min(260px, root.tablet-w - 30px); image-fit: contain; }
-                            if root.tablet-fp != "" : Text { text: "CA fingerprint (compare on device):\n" + root.tablet-fp; color: Theme.text; font-size: 11px; wrap: word-wrap; }
+                            if root.tablet-fp != "" : Text { text: "CA fingerprint (compare on device):\n" + root.tablet-fp; color: Theme.text; font-size: 11px * Theme.scale; wrap: word-wrap; }
                             for d in root.tablet-pending : Rectangle {
-                                height: 90px; border-radius: 6px; background: Theme.surface;
+                                height: 100px * Theme.scale; border-radius: 6px; background: Theme.surface;
                                 VerticalLayout {
                                     padding: 8px; spacing: 4px;
                                     Text { text: d.name + " wants to pair"; color: Theme.text; }
-                                    Text { text: "Code: " + d.detail; color: Theme.accent; font-size: 22px; font-weight: 700; }
+                                    Text { text: "Code: " + d.detail; color: Theme.accent; font-size: 22px * Theme.scale; font-weight: 700; }
                                     HorizontalLayout {
                                         spacing: 6px;
                                         ToolButton { label: "Approve"; clicked => { root.tablet-approve(d.id); } }
@@ -428,14 +852,14 @@ export component MainWindow inherits Window {
                                     }
                                 }
                             }
-                            Text { text: "Paired devices"; color: Theme.muted; font-size: 12px; }
+                            SectionTitle { text: "Paired devices"; }
                             for d in root.tablet-devices : Rectangle {
-                                height: 56px; border-radius: 6px; background: Theme.surface;
+                                height: Theme.hit + 20px; border-radius: 6px; background: Theme.surface;
                                 HorizontalLayout {
                                     padding: 6px; spacing: 6px;
                                     VerticalLayout {
                                         Text { text: d.name; color: Theme.text; }
-                                        Text { text: d.detail; color: Theme.muted; font-size: 11px; }
+                                        Text { text: d.detail; color: Theme.muted; font-size: 11px * Theme.scale; }
                                     }
                                     ToolButton { label: "Revoke"; clicked => { root.tablet-revoke(d.id); } }
                                 }
@@ -444,6 +868,208 @@ export component MainWindow inherits Window {
                         }
                     }
                 }
+            }
+            // ---- status line
+            if root.status != "" && !root.present-mode : Rectangle {
+                background: Theme.surface;
+                height: 28px * Theme.scale;
+                Text { x: 10px; text: root.status; color: Theme.accent; vertical-alignment: center; font-size: Theme.fs-small; overflow: elide; width: parent.width - 20px; }
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- overlays
+    if root.overlay == "palette" || root.overlay == "shortcuts" : Modal {
+        title: root.overlay == "palette" ? "Commands" : "Keyboard shortcuts (click one to change it)";
+        close => { root.close-overlay(); }
+        pq := LineEdit {
+            height: Theme.hit;
+            placeholder-text: "Type to filter, Enter runs the first match";
+            init => { self.focus(); }
+            edited(t) => { root.overlay-query(t); }
+            accepted(t) => { if root.commands.length > 0 { root.overlay-pick(root.commands[0].id); } }
+        }
+        if root.rebinding != "" : Text { text: "Press the new key combination for \"" + root.rebinding + "\" (Backspace clears, Esc cancels)"; color: Theme.urgent; wrap: word-wrap; }
+        if root.overlay == "shortcuts" : HorizontalLayout { alignment: end; ToolButton { label: "Reset all to defaults"; clicked => { root.reset-shortcuts(); } } }
+        ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
+                spacing: 2px;
+                alignment: start;
+                for c in root.commands : Rectangle {
+                    height: Theme.hit;
+                    border-radius: 6px;
+                    background: cma.has-hover ? Theme.hover : transparent;
+                    cma := TouchArea { clicked => { if root.overlay == "palette" { root.overlay-pick(c.id); } else { root.start-rebind(c.id); } } }
+                    HorizontalLayout {
+                        padding-left: 8px; padding-right: 8px; spacing: 8px;
+                        Text { text: c.group; color: Theme.muted; font-size: Theme.fs-small; vertical-alignment: center; width: 70px * Theme.scale; }
+                        Text { text: c.title; color: Theme.text; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+                        Text { text: c.key; color: Theme.accent; font-size: Theme.fs-small; vertical-alignment: center; }
+                    }
+                }
+            }
+        }
+    }
+    if root.overlay == "switcher" || root.overlay == "trash" || root.overlay == "history" || root.overlay == "backups" || root.overlay == "split-pick" : Modal {
+        title: root.overlay == "switcher" ? "Go to page" : root.overlay == "trash" ? "Trash (pages are kept 30 days)" : root.overlay == "history" ? "Version history" : root.overlay == "backups" ? "Backups" : "Show which page beside this one?";
+        card-h: 600px;
+        close => { root.close-overlay(); }
+        if root.overlay == "switcher" || root.overlay == "split-pick" : LineEdit {
+            height: Theme.hit;
+            placeholder-text: "Page title";
+            init => { self.focus(); }
+            edited(t) => { root.overlay-query(t); }
+            accepted(t) => { if root.items.length > 0 { root.overlay-pick(root.items[0].id); } }
+        }
+        if root.items-hint != "" : Text { text: root.items-hint; color: Theme.muted; wrap: word-wrap; font-size: Theme.fs-small; }
+        HorizontalLayout {
+            vertical-stretch: 1;
+            spacing: 8px;
+            ScrollView {
+                VerticalLayout {
+                    spacing: 2px;
+                    alignment: start;
+                    if root.items.length == 0 : Text { text: "Nothing here."; color: Theme.muted; }
+                    for it in root.items : Rectangle {
+                        height: Theme.hit + 8px;
+                        border-radius: 6px;
+                        background: ita.has-hover ? Theme.hover : Theme.surface;
+                        ita := TouchArea { clicked => { root.overlay-pick(it.id); } }
+                        VerticalLayout {
+                            padding-left: 8px; alignment: center;
+                            Text { text: it.title; color: Theme.text; overflow: elide; }
+                            if it.detail != "" : Text { text: it.detail; color: Theme.muted; font-size: Theme.fs-small; overflow: elide; }
+                        }
+                    }
+                }
+            }
+            if root.has-preview : VerticalLayout {
+                width: 45%;
+                spacing: 6px;
+                ScrollView { Image { source: root.preview-image; width: parent.width; image-fit: contain; } }
+                ToolButton { label: "Restore this version"; active: true; clicked => { root.run-command("history-restore"); } }
+            }
+        }
+        if root.overlay == "backups" : HorizontalLayout {
+            spacing: 6px; alignment: end;
+            Text { text: root.backup-info; color: Theme.muted; font-size: Theme.fs-small; vertical-alignment: center; horizontal-stretch: 1; wrap: word-wrap; }
+            ToolButton { label: "Back up now"; clicked => { root.run-command("backup"); } }
+        }
+    }
+    if root.overlay == "symbols" : Modal {
+        title: "Symbols (click to insert at the cursor)";
+        card-w: 760px; card-h: 620px;
+        close => { root.close-overlay(); }
+        LineEdit {
+            height: Theme.hit;
+            placeholder-text: "Search: alpha, integral, arrow, subset, real ...";
+            init => { self.focus(); }
+            edited(t) => { root.overlay-query(t); }
+        }
+        sgrid := ScrollView {
+            vertical-stretch: 1;
+            property <int> cols: max(4, floor(self.visible-width / (64px * Theme.scale)));
+            Rectangle {
+                height: ceil(root.symbols.length / max(1, parent.cols)) * 64px * Theme.scale;
+                for s[i] in root.symbols : Rectangle {
+                    x: mod(i, max(1, sgrid.cols)) * 64px * Theme.scale;
+                    y: floor(i / max(1, sgrid.cols)) * 64px * Theme.scale;
+                    width: 60px * Theme.scale; height: 60px * Theme.scale;
+                    border-radius: 6px;
+                    background: sya.has-hover ? Theme.hover : Theme.surface;
+                    accessible-role: button; accessible-label: s.name;
+                    Text { text: s.sym; color: Theme.text; font-size: 24px * Theme.scale; horizontal-alignment: center; vertical-alignment: center; }
+                    Text { y: parent.height - 14px * Theme.scale; width: parent.width; text: s.name; color: Theme.muted; font-size: 9px * Theme.scale; horizontal-alignment: center; overflow: elide; }
+                    sya := TouchArea { clicked => { root.insert-symbol(s.sym); } }
+                }
+            }
+        }
+    }
+    if root.overlay == "prompt" : Modal {
+        title: root.prompt-title;
+        card-h: 260px;
+        close => { root.close-overlay(); }
+        Text { text: root.prompt-hint; color: Theme.muted; wrap: word-wrap; }
+        pin := LineEdit {
+            height: Theme.hit;
+            input-type: root.prompt-password ? InputType.password : InputType.text;
+            init => { self.focus(); }
+            accepted(t) => { root.prompt-ok(t); }
+        }
+        HorizontalLayout { alignment: end; spacing: 6px; ToolButton { label: "Cancel"; clicked => { root.close-overlay(); } } ToolButton { label: "OK"; active: true; clicked => { root.prompt-ok(pin.text); } } }
+    }
+    if root.overlay == "colors" : cm := Modal {
+        title: "Custom colour";
+        card-h: 420px;
+        close => { root.close-overlay(); }
+        property <float> cr: 122;
+        property <float> cg: 162;
+        property <float> cb: 247;
+        Rectangle { height: Theme.hit; border-radius: 6px; background: rgb(cm.cr, cm.cg, cm.cb); }
+        BigSlider { label: "Red"; display: Math.round(cr); value: cr; minimum: 0; maximum: 255; step: 5; track-width: 260px * Theme.scale; changed(v) => { cr = v; } }
+        BigSlider { label: "Green"; display: Math.round(cg); value: cg; minimum: 0; maximum: 255; step: 5; track-width: 260px * Theme.scale; changed(v) => { cg = v; } }
+        BigSlider { label: "Blue"; display: Math.round(cb); value: cb; minimum: 0; maximum: 255; step: 5; track-width: 260px * Theme.scale; changed(v) => { cb = v; } }
+        HorizontalLayout {
+            spacing: 6px; alignment: end;
+            ToolButton { label: "Use for pen"; active: true; clicked => { root.set-custom-color(Math.round(cr), Math.round(cg), Math.round(cb)); root.close-overlay(); } }
+            ToolButton { label: "Save as pen 1"; clicked => { root.set-custom-color(Math.round(cr), Math.round(cg), Math.round(cb)); root.save-pen(0); } }
+            ToolButton { label: "Pen 2"; clicked => { root.set-custom-color(Math.round(cr), Math.round(cg), Math.round(cb)); root.save-pen(1); } }
+            ToolButton { label: "Pen 3"; clicked => { root.set-custom-color(Math.round(cr), Math.round(cg), Math.round(cb)); root.save-pen(2); } }
+        }
+        Text { text: "Favourite pens remember colour, width and pen/highlighter. Alt+1/2/3 switch to them."; color: Theme.muted; wrap: word-wrap; font-size: Theme.fs-small; }
+    }
+    if root.overlay == "settings" : Modal {
+        title: "Settings (saved automatically)";
+        card-w: 720px; card-h: 640px;
+        close => { root.close-overlay(); }
+        ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
+                spacing: 8px * Theme.scale;
+                alignment: start;
+                SectionTitle { text: "Theme"; }
+                HorizontalLayout {
+                    spacing: 6px; alignment: start;
+                    ToolButton { label: "Dark"; active: root.theme-name == "dark"; clicked => { root.set-theme("dark"); } }
+                    ToolButton { label: "Light"; active: root.theme-name == "light"; clicked => { root.set-theme("light"); } }
+                    ToolButton { label: "High contrast"; active: root.theme-name == "contrast"; clicked => { root.set-theme("contrast"); } }
+                    ToolButton { label: "Custom"; active: root.theme-name == "custom"; clicked => { root.set-theme("custom"); } }
+                }
+                if root.theme-name == "custom" : VerticalLayout {
+                    spacing: 4px;
+                    Text { text: "Custom theme: pick a colour for each part."; color: Theme.muted; font-size: Theme.fs-small; }
+                    for part in ["bg", "surface", "panel", "text", "accent", "urgent"] : HorizontalLayout {
+                        spacing: 4px; alignment: start;
+                        Text { text: part; color: Theme.text; width: 80px * Theme.scale; vertical-alignment: center; }
+                        for c in [#1a1b26, #24283b, #1f2335, #f7f7fa, #e4e7f0, #000000, #c0caf5, #1f2335, #ffffff, #7aa2f7, #2e5cd6, #9ece6a, #e0af68, #bb9af7, #f7768e, #ffd700] : Rectangle {
+                            width: Theme.hit * 0.9; height: Theme.hit * 0.9; border-radius: 4px; background: c; border-width: 1px; border-color: Theme.muted;
+                            TouchArea { clicked => { root.set-custom-theme(part, c.red, c.green, c.blue); } }
+                        }
+                    }
+                }
+                SectionTitle { text: "Size"; }
+                BigSlider { label: "UI scale"; display: Math.round(root.ui-scale * 100) + "%"; value: root.ui-scale; minimum: 0.75; maximum: 2.0; step: 0.05; track-width: 240px * Theme.scale; changed(v) => { root.set-ui-scale(v); } }
+                CheckBox { text: "Tablet mode (larger targets, simpler toolbar)"; checked: root.tablet-mode; toggled => { root.toggle-setting("tablet-mode"); } }
+                SectionTitle { text: "Ink and recognition"; }
+                BigSlider { label: "Smoothing"; display: Math.round(root.smoothing * 100) + "%"; value: root.smoothing; minimum: 0; maximum: 1; step: 0.05; track-width: 240px * Theme.scale; changed(v) => { root.set-smoothing(v); } }
+                BigSlider { label: "Recognize after"; display: Math.round(root.recog-delay) + " ms"; value: root.recog-delay; minimum: 200; maximum: 3000; step: 100; track-width: 240px * Theme.scale; changed(v) => { root.set-delay(v); } }
+                CheckBox { text: "Snap lines, circles and rectangles (Drawing mode only; never in Math/Text)"; checked: root.snap-shapes; toggled => { root.toggle-setting("snap"); } }
+                CheckBox { text: "Spell check text blocks"; checked: root.spell-check; toggled => { root.toggle-setting("spell"); } }
+                SectionTitle { text: "Paper colour"; }
+                HorizontalLayout {
+                    spacing: 6px; alignment: start;
+                    for c[i] in [#414868, #565f89, #7aa2f7, #9ece6a, #e0af68, #c0caf5] : Rectangle {
+                        width: Theme.hit; height: Theme.hit; border-radius: 6px; background: c;
+                        TouchArea { clicked => { root.set-paper-color(i); } }
+                    }
+                }
+                SectionTitle { text: "Backups"; }
+                CheckBox { text: "Daily automatic backup (zip of the notes folder)"; checked: root.backup-daily; toggled => { root.toggle-setting("backup"); } }
+                Text { text: root.backup-info; color: Theme.muted; wrap: word-wrap; font-size: Theme.fs-small; }
+                HorizontalLayout { spacing: 6px; alignment: start; ToolButton { label: "Back up now"; clicked => { root.run-command("backup"); } } ToolButton { label: "Restore…"; clicked => { root.run-command("restore-backup"); } } }
+                SectionTitle { text: "Keyboard"; }
+                ToolButton { label: "Shortcuts and rebinding…"; clicked => { root.run-command("shortcuts"); } }
             }
         }
     }

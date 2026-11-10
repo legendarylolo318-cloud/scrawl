@@ -38,7 +38,16 @@ pub enum Block {
     /// Rich text as Typst markup (may contain inline `$math$`).
     Text { markup: String },
     Callout { kind: CalloutKind, markup: String },
-    Image { file: String, x: f32, y: f32, w: f32, h: f32 },
+    Image {
+        file: String,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        /// Fractions cut from [left, top, right, bottom].
+        #[serde(default)]
+        crop: Option<[f32; 4]>,
+    },
     Plot { functions: Vec<String>, x_range: (f32, f32), y_range: Option<(f32, f32)> },
     Rule,
 }
@@ -59,6 +68,9 @@ pub struct Page {
     pub blocks: Vec<Block>,
     /// Imported PDF used as the page background (file name inside the notebook's media folder).
     pub pdf_background: Option<String>,
+    /// Audio recorded while writing, with stroke-id -> offset marks for playback sync.
+    #[serde(default)]
+    pub audio: Option<AudioClip>,
     pub modified_ms: u64,
 }
 
@@ -77,41 +89,17 @@ impl Page {
             strokes: vec![],
             blocks: vec![],
             pdf_background: None,
+            audio: None,
             modified_ms: 0,
         }
     }
 
     /// Human-readable Typst source for this page (the `.typ` file next to the JSON sidecar).
     pub fn to_typst(&self) -> String {
-        let mut s = format!("= {}\n", self.title);
-        if !self.course.is_empty() || self.lecture.is_some() {
-            s += &format!("_{}", self.course);
-            if let Some(l) = self.lecture {
-                s += &format!(" · lecture {l}");
-            }
-            s += &format!(" · {}_\n", self.date);
-        }
+        let mut s = self.header_typst();
         for b in &self.blocks {
             s += "\n";
-            match b {
-                Block::Math { expr, source } => match source {
-                    Some(raw) if expr.is_empty() => s += &format!("$ {raw} $\n"),
-                    _ => s += &format!("$ {} $\n", expr.to_typst()),
-                },
-                Block::Text { markup } => s += &format!("{markup}\n"),
-                Block::Callout { kind, markup } => {
-                    let (name, fill) = match kind {
-                        CalloutKind::Definition => ("Definition", "rgb(\"#e0e7ff\")"),
-                        CalloutKind::Theorem => ("Theorem", "rgb(\"#dcfce7\")"),
-                        CalloutKind::Example => ("Example", "rgb(\"#fef9c3\")"),
-                        CalloutKind::Warning => ("Warning", "rgb(\"#fee2e2\")"),
-                    };
-                    s += &format!("#block(fill: {fill}, inset: 8pt, radius: 4pt)[*{name}.* {markup}]\n");
-                }
-                Block::Image { file, w, .. } => s += &format!("#image(\"{file}\", width: {w}pt)\n"),
-                Block::Plot { functions, .. } => s += &format!("// plot: {}\n", functions.join(", ")),
-                Block::Rule => s += "#line(length: 100%)\n",
-            }
+            s += &block_typst(b, None);
         }
         s
     }
@@ -233,5 +221,103 @@ mod tests {
         assert!(t.starts_with("= Chain rule"));
         assert!(t.contains("Calc 1 · lecture 4 · 2026-11-09"));
         assert!(t.contains("$ x^2 $"));
+    }
+}
+/// Escape plain text (titles, course names) for Typst markup so it is shown literally.
+pub fn typst_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if matches!(c, '\\' | '#' | '$' | '*' | '_' | '`' | '<' | '>' | '@' | '/' | '[' | ']' | '~' | '"') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// Escape a string for use inside a Typst string literal.
+pub fn typst_str(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// Typst for one block. `plot_file`: name of a pre-rendered plot image, if the caller has one.
+pub fn block_typst(b: &Block, plot_file: Option<&str>) -> String {
+    match b {
+        Block::Math { expr, source } => match source {
+            Some(raw) if expr.is_empty() => format!("$ {raw} $\n"),
+            _ => format!("$ {} $\n", expr.to_typst()),
+        },
+        Block::Text { markup } => format!("{markup}\n"),
+        Block::Callout { kind, markup } => {
+            let (name, fill) = match kind {
+                CalloutKind::Definition => ("Definition", "rgb(\"#e0e7ff\")"),
+                CalloutKind::Theorem => ("Theorem", "rgb(\"#dcfce7\")"),
+                CalloutKind::Example => ("Example", "rgb(\"#fef9c3\")"),
+                CalloutKind::Warning => ("Warning", "rgb(\"#fee2e2\")"),
+            };
+            format!("#block(fill: {fill}, inset: 8pt, radius: 4pt, width: 100%)[*{name}.* {markup}]\n")
+        }
+        Block::Image { file, w, h, crop, .. } => match crop {
+            // w, h: displayed size of the whole image; crop = [left, top, right, bottom] fractions removed
+            Some([l, t, r, btm]) if (*l + *r) < 0.95 && (*t + *btm) < 0.95 => format!(
+                "#box(width: {:.2}pt, height: {:.2}pt, clip: true)[#move(dx: -{:.2}pt, dy: -{:.2}pt)[#image(\"{}\", width: {w}pt, height: {h}pt)]]\n",
+                w * (1.0 - l - r),
+                h * (1.0 - t - btm),
+                w * l,
+                h * t,
+                typst_str(file)
+            ),
+            _ => format!("#image(\"{}\", width: {w}pt)\n", typst_str(file)),
+        },
+        Block::Plot { functions, .. } => match plot_file {
+            Some(f) => format!("#image(\"{}\", width: 100%)\n", typst_str(f)),
+            None => format!("// plot: {}\n", functions.join(", ").replace('\n', " ")),
+        },
+        Block::Rule => "#line(length: 100%)\n".into(),
+    }
+}
+
+impl Page {
+    /// Typst page setup for the fixed page modes.
+    pub fn paper_typst(&self) -> &'static str {
+        match self.mode {
+            PageMode::Letter => "#set page(paper: \"us-letter\", margin: 18mm)\n",
+            PageMode::A4 | PageMode::Infinite => "#set page(paper: \"a4\", margin: 18mm)\n",
+        }
+    }
+
+    /// Title and metadata header (escaped).
+    pub fn header_typst(&self) -> String {
+        let mut s = format!("= {}\n", typst_escape(&self.title));
+        if !self.course.is_empty() || self.lecture.is_some() {
+            s += &format!("_{}", typst_escape(&self.course));
+            if let Some(l) = self.lecture {
+                s += &format!(" · lecture {l}");
+            }
+            s += &format!(" · {}_\n", typst_escape(&self.date));
+        }
+        s
+    }
+}
+
+/// A recording attached to a page (Ogg Opus file in the notebook's media folder).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+pub struct AudioClip {
+    pub file: String,
+    /// (stroke id, milliseconds into the recording when the stroke started).
+    pub marks: Vec<(u64, u32)>,
+    pub duration_ms: u32,
+}
+
+#[cfg(test)]
+mod escape_tests {
+    use super::*;
+
+    #[test]
+    fn hostile_titles_are_shown_literally() {
+        let p = Page::new("p", "#read(\"/etc/passwd\") $x$ *b* _i_ // c", "2026-01-01");
+        let h = p.header_typst();
+        assert!(h.contains("\\#read"), "{h}");
+        assert!(h.contains("\\$x\\$") && h.contains("\\/\\/"), "{h}");
     }
 }

@@ -77,6 +77,32 @@ impl Document {
         n
     }
 
+    /// Replace the strokes with the given ids by `new` (e.g. moved copies) as one undoable edit.
+    pub fn replace_ids(&mut self, ids: &[u64], new: Vec<Stroke>) -> usize {
+        let removed: Vec<(usize, Stroke)> = self.strokes.iter().enumerate().filter(|(_, s)| ids.contains(&s.id)).map(|(i, s)| (i, s.clone())).collect();
+        if removed.is_empty() {
+            return 0;
+        }
+        for (i, _) in removed.iter().rev() {
+            self.strokes.remove(*i);
+        }
+        self.strokes.extend(new.iter().cloned());
+        let n = removed.len();
+        self.undo.push(Edit::Replace { removed, added: new });
+        self.redo.clear();
+        n
+    }
+
+    /// Move strokes by (dx, dy) as one undoable edit.
+    pub fn translate_ids(&mut self, ids: &[u64], dx: f32, dy: f32) -> usize {
+        let moved: Vec<Stroke> = self.strokes.iter().filter(|s| ids.contains(&s.id)).map(|s| {
+            let mut s = s.clone();
+            s.points.iter_mut().for_each(|p| { p.x += dx; p.y += dy; });
+            s
+        }).collect();
+        self.replace_ids(ids, moved)
+    }
+
     /// Strokes that come within `radius` of (x, y).
     pub fn hit_test(&self, x: f32, y: f32, radius: f32) -> Vec<u64> {
         self.strokes
@@ -242,5 +268,28 @@ mod tests {
         assert_eq!(d.strokes[0].points.len(), 10);
         d.redo();
         assert_eq!(d.strokes.len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod move_tests {
+    use super::*;
+
+    #[test]
+    fn translate_is_one_undoable_edit() {
+        let mut d = Document::new();
+        let pts = vec![Point::new(0.0, 0.0, 0), Point::new(10.0, 0.0, 5)];
+        let a = d.add_stroke(Document::make_stroke(pts.clone(), [255; 4], 2.0, PenKind::Pen, InkMode::Drawing));
+        let b = d.add_stroke(Document::make_stroke(pts, [255; 4], 2.0, PenKind::Pen, InkMode::Drawing));
+        assert_eq!(d.translate_ids(&[a], 5.0, 7.0), 1);
+        let s = d.strokes.iter().find(|s| s.id == a).unwrap();
+        assert_eq!((s.points[0].x, s.points[0].y), (5.0, 7.0));
+        d.undo();
+        let s = d.strokes.iter().find(|s| s.id == a).unwrap();
+        assert_eq!((s.points[0].x, s.points[0].y), (0.0, 0.0));
+        assert_eq!(d.strokes.len(), 2);
+        d.redo();
+        assert_eq!(d.strokes.iter().find(|s| s.id == a).unwrap().points[0].x, 5.0);
+        assert!(d.strokes.iter().any(|s| s.id == b));
     }
 }

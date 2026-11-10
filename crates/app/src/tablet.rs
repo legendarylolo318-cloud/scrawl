@@ -1,7 +1,7 @@
 //! Glue between the tablet server (`remote`) and the app: starting/stopping it, pairing UI,
 //! and applying strokes / text / commands that arrive from the device.
 
-use crate::{refresh, run_recognition, update_expr, update_strip, DeviceRow, MainWindow, State, Tool, PALETTE};
+use crate::{dirty, flush, run_recognition, update_expr, update_strip, DeviceRow, MainWindow, State, Tool};
 use ink::{smooth_stroke, EraserMode, InkMode, PenKind, Point, SmoothingConfig, Stroke};
 use input::Out;
 use layout::{Accent, BigOp, Fence, MatrixKind};
@@ -60,6 +60,15 @@ pub fn push_state(st: &State) {
     }
     let e = if st.typed_since_recog || !st.editor.expr().is_empty() { st.editor.expr() } else { st.session.expression() };
     h.send(ServerMsg::State { drawing: st.mode == InkMode::Drawing, can_undo: st.doc.can_undo(), can_redo: st.doc.can_redo(), expr: e.to_unicode() });
+    // Render of the active block only (never other notes), so the device shows typeset math.
+    let png = if e.is_empty() {
+        Vec::new()
+    } else {
+        render::compile(&render::math_source(&e.to_typst(), 18.0, [0xc0, 0xca, 0xf5]), &[]).ok().and_then(|d| render::png(&d, 0, 2.0)).unwrap_or_default()
+    };
+    if png.len() < 512 * 1024 {
+        h.send(ServerMsg::frame(&png));
+    }
     let labels: Vec<String> = st.session.selected.and_then(|i| st.session.symbols.get(i)).map(|s| s.cands.iter().map(|c| c.label.clone()).collect()).unwrap_or_default();
     h.send(ServerMsg::Candidates { labels });
 }
@@ -139,16 +148,16 @@ fn apply(ui: &MainWindow, st: &mut State, ev: RemoteEvent) -> bool {
             match pen {
                 Pen::Eraser => {
                     let path: Vec<(f32, f32)> = page.iter().map(|p| (p.x, p.y)).collect();
-                    let r = (st.width * 2.0 + 4.0) / st.view.scale;
+                    let r = (st.settings.width * 2.0 + 4.0) / st.view.scale;
                     let mode = st.eraser_mode;
                     st.doc.erase_path(&path, r, mode);
                 }
                 other => {
                     let kind = if other == Pen::Highlighter { PenKind::Highlighter } else { PenKind::Pen };
-                    let c = PALETTE[st.color];
+                    let c = st.color;
                     let stroke = Stroke {
                         id: 0,
-                        points: smooth_stroke(&page, SmoothingConfig { strength: st.smoothing }),
+                        points: smooth_stroke(&page, SmoothingConfig { strength: st.settings.smoothing }),
                         color: [c[0], c[1], c[2], if kind == PenKind::Highlighter { 0x66 } else { 0xff }],
                         width: width.max(0.5),
                         kind,
@@ -185,7 +194,8 @@ fn apply(ui: &MainWindow, st: &mut State, ev: RemoteEvent) -> bool {
                 Command::Tool { pen } => st.tool = match pen { Pen::Pen => Tool::Pen, Pen::Highlighter => Tool::Highlighter, Pen::Eraser => Tool::Eraser },
                 Command::Color { rgb } => {
                     let (r, g, b) = ((rgb >> 16) as i32 & 255, (rgb >> 8) as i32 & 255, rgb as i32 & 255);
-                    st.color = (0..PALETTE.len()).min_by_key(|&i| (PALETTE[i][0] as i32 - r).pow(2) + (PALETTE[i][1] as i32 - g).pow(2) + (PALETTE[i][2] as i32 - b).pow(2)).unwrap_or(0);
+                    st.color = [r as u8, g as u8, b as u8];
+                    st.active_pen = None;
                 }
                 Command::Choose { i } => {
                     if st.session.choose(i as usize, &st.doc.strokes) {
@@ -280,7 +290,8 @@ pub fn wire(ui: &MainWindow, st: &Rc<RefCell<State>>) {
                                 ink_changed |= apply(&ui, &mut s, e);
                             }
                             changed_ui = true;
-                            refresh(&ui, &s);
+                            s.dirty |= dirty::CANVAS | dirty::TOOLS;
+                            flush(&ui, &mut s);
                             refresh_ui(&ui, &s);
                         }
                         let _ = changed_ui;

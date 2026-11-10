@@ -12,6 +12,7 @@ button:active{filter:brightness(1.3)}
 #strip button{min-width:64px;min-height:56px;font-size:26px}
 #strip button small{display:block;font-size:11px;opacity:.6}
 #expr{padding:4px 10px;min-height:28px;color:var(--accent);background:#1f2335;font-family:ui-monospace,monospace}
+#frame{display:block;max-width:100%;max-height:120px;margin:4px auto;background:#1f2335}
 #color{width:48px;height:48px;border:0;padding:0;background:none}
 .chk{display:flex;align-items:center;gap:6px;min-height:48px}
 .chk input{width:24px;height:24px}

@@ -1,15 +1,23 @@
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
+mod actions;
+mod commands;
 mod graphview;
 mod headless;
+mod pagedoc;
 mod raster;
 mod selftest;
 mod session;
+mod settings;
+mod symbols;
 mod tablet;
 mod workspace;
 
 use graphview::GraphView;
-use ink::{is_scribble, smooth_stroke, Document, EraserMode, InkMode, PenKind, Point, SmoothingConfig, Stroke};
-use raster::{Paper, PaperKind, View};
+use ink::{is_scribble, smooth_stroke, snap_shape, Document, EraserMode, InkMode, PenKind, Point, SmoothingConfig, Stroke};
+use raster::{Background, Canvas, Overlay, Paper, PaperKind, View};
 use session::Session;
+use settings::Settings;
 use slint::{ComponentHandle, ModelRc, SharedPixelBuffer, SharedString, VecModel};
 use std::cell::RefCell;
 use std::collections::HashSet;
@@ -21,13 +29,43 @@ use workspace::Workspace;
 slint::include_modules!();
 
 const PRIORITY: usize = recog::PRIORITY_MIN_SAMPLES;
-const PALETTE: [[u8; 3]; 6] = [[0xc0, 0xca, 0xf5], [0xf7, 0x76, 0x8e], [0x9e, 0xce, 0x6a], [0x7a, 0xa2, 0xf7], [0xe0, 0xaf, 0x68], [0xbb, 0x9a, 0xf7]];
+/// Quick colours; the first one follows the theme's text colour so it is always visible.
+pub const PALETTE: [[u8; 3]; 6] = [[0xc0, 0xca, 0xf5], [0xf7, 0x76, 0x8e], [0x9e, 0xce, 0x6a], [0x7a, 0xa2, 0xf7], [0xe0, 0xaf, 0x68], [0xbb, 0x9a, 0xf7]];
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Tool {
     Pen,
     Highlighter,
     Eraser,
+    Lasso,
+}
+
+/// What a text prompt overlay is asking for.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Prompt {
+    NewSection,
+    NewNotebook,
+    NewEncryptedName,
+    NewEncryptedPassword(String),
+    Unlock(String),
+    SaveTemplate,
+    ImagePath,
+    PdfPath,
+    MatPath,
+    PlotFunctions,
+    RestoreBackup(String),
+    ExternalChange,
+}
+
+/// Which parts of the UI need refreshing after a state change.
+pub mod dirty {
+    pub const CANVAS: u32 = 1;
+    pub const SIDEBAR: u32 = 2;
+    pub const DOC: u32 = 4;
+    pub const STRIP: u32 = 8;
+    pub const TABS: u32 = 16;
+    pub const TOOLS: u32 = 32;
+    pub const ALL: u32 = 0xff;
 }
 
 pub struct State {
@@ -37,17 +75,22 @@ pub struct State {
     pub tool: Tool,
     pub mode: InkMode,
     pub eraser_mode: EraserMode,
-    pub smoothing: f32,
-    pub width: f32,
-    pub color: usize,
+    pub settings: Settings,
+    pub color: [u8; 3],
+    pub active_pen: Option<usize>,
     pub live: Vec<Point>,
     pub eraser_path: Vec<(f32, f32)>,
+    pub lasso: Vec<(f32, f32)>,
+    pub selection: Vec<u64>,
+    pub drag_from: Option<(f32, f32)>,
+    pub drag_total: (f32, f32),
     pub down_at: Option<Instant>,
     pub t0_ms: u64,
     pub epoch: Instant,
     pub session: Session,
-    pub recog_delay_ms: u64,
     pub paper: Paper,
+    pub canvas: Canvas,
+    pub background: Option<Background>,
     pub training: bool,
     pub train_labels: Vec<String>,
     pub train_idx: usize,
@@ -59,12 +102,35 @@ pub struct State {
     pub typed_since_recog: bool,
     pub consumed: HashSet<u64>,
     pub math_cache: Arc<render::MathCache>,
+    pub blocks: pagedoc::BlockCache,
+    pub doc_width: f32,
+    pub editing: Option<usize>,
+    pub speller: Option<pagedoc::Speller>,
     pub tablet: tablet::Tablet,
+    pub back: Vec<String>,
+    pub fwd: Vec<String>,
+    pub tabs: Vec<String>,
+    pub split: Option<String>,
+    pub overlay: String,
+    pub overlay_ids: Vec<String>,
+    pub history_pick: Option<u64>,
+    pub prompt: Option<Prompt>,
+    pub rebinding: Option<String>,
+    pub symbol_rows: Vec<symbols::Sym>,
+    pub recorder: Option<media::audio::Recorder>,
+    pub rec_marks: Vec<(u64, u32)>,
+    pub playing: Option<Box<dyn std::any::Any>>,
+    pub dirty: u32,
+    pub last_backup_check: u64,
+    pub last_disk_check: u64,
+    pub status: String,
 }
 
 impl State {
-    fn new() -> Self {
-        let ws = Workspace::open(&workspace::default_root()).ok();
+    fn new(settings: Settings) -> Self {
+        let root = workspace::default_root();
+        let ws = Workspace::open_with(&root, settings.last_notebook.as_deref(), settings.last_page.as_deref()).ok();
+        let paper = Paper { kind: paper_kind(&settings.paper_kind), spacing: settings.paper_spacing, color: [settings.paper_color[0], settings.paper_color[1], settings.paper_color[2], 0xff] };
         let mut st = Self {
             doc: Document::new(),
             view: View::default(),
@@ -72,17 +138,21 @@ impl State {
             tool: Tool::Pen,
             mode: InkMode::MathText,
             eraser_mode: EraserMode::Stroke,
-            smoothing: 0.5,
-            width: 3.0,
-            color: 0,
+            color: settings.pens[0].rgb,
+            active_pen: Some(0),
             live: Vec::new(),
             eraser_path: Vec::new(),
+            lasso: Vec::new(),
+            selection: Vec::new(),
+            drag_from: None,
+            drag_total: (0.0, 0.0),
             down_at: None,
             t0_ms: 0,
             epoch: Instant::now(),
             session: Session::new(session::config_dir().map(|d| d.join("personal.json"))),
-            recog_delay_ms: 600,
-            paper: Paper::default(),
+            paper,
+            canvas: Canvas::default(),
+            background: None,
             training: false,
             train_labels: Vec::new(),
             train_idx: 0,
@@ -94,14 +164,51 @@ impl State {
             typed_since_recog: false,
             consumed: HashSet::new(),
             math_cache: Arc::new(render::MathCache::default()),
+            blocks: pagedoc::BlockCache::default(),
+            doc_width: 380.0,
+            editing: None,
+            speller: None,
             tablet: tablet::Tablet::default(),
+            back: Vec::new(),
+            fwd: Vec::new(),
+            tabs: settings.tabs.clone(),
+            split: None,
+            overlay: String::new(),
+            overlay_ids: Vec::new(),
+            history_pick: None,
+            prompt: None,
+            rebinding: None,
+            symbol_rows: Vec::new(),
+            recorder: None,
+            rec_marks: Vec::new(),
+            playing: None,
+            dirty: dirty::ALL,
+            last_backup_check: 0,
+            last_disk_check: 0,
+            status: String::new(),
+            settings,
         };
+        st.width_from_pen(0);
         st.load_page_into_doc();
         st
     }
 
+    fn width_from_pen(&mut self, i: usize) {
+        if let Some(p) = self.settings.pens.get(i) {
+            self.color = p.rgb;
+            self.settings.width = p.width;
+            if p.highlighter {
+                self.tool = Tool::Highlighter;
+            }
+        }
+    }
+
+    pub fn light(&self) -> bool {
+        !self.settings.colors().is_dark()
+    }
+
     fn pen_color(&self) -> [u8; 4] {
-        let c = PALETTE[self.color];
+        let c = self.color;
         [c[0], c[1], c[2], if self.tool == Tool::Highlighter { 0x66 } else { 0xff }]
     }
 
@@ -110,7 +217,7 @@ impl State {
             id: u64::MAX,
             points: self.live.clone(),
             color: self.pen_color(),
-            width: self.width,
+            width: self.settings.width,
             kind: if self.tool == Tool::Highlighter { PenKind::Highlighter } else { PenKind::Pen },
             mode: self.mode,
             t0_ms: self.t0_ms,
@@ -121,60 +228,314 @@ impl State {
         store::now_ms()
     }
 
-    /// Replace the canvas with the current page's saved ink and paper.
-    fn load_page_into_doc(&mut self) {
+    /// Replace the canvas with the current page's saved ink, paper and background.
+    pub fn load_page_into_doc(&mut self) {
         if let Some(ws) = &self.ws {
             self.doc = Document::with_strokes(ws.page.strokes.clone());
-            self.paper.kind = match ws.page.paper.kind.as_str() {
-                "blank" => PaperKind::Blank,
-                "grid" => PaperKind::Grid,
-                "dots" => PaperKind::Dots,
-                "engineering" => PaperKind::Engineering,
-                "polar" => PaperKind::Polar,
-                _ => PaperKind::Lined,
-            };
+            self.paper.kind = paper_kind(&ws.page.paper.kind);
             self.paper.spacing = ws.page.paper.spacing;
+            self.background = ws.page.pdf_background.as_ref().and_then(|name| ws.media(name)).and_then(|png| decode_background(&png));
+            if !self.tabs.contains(&ws.page.id) {
+                self.tabs.push(ws.page.id.clone());
+                if self.tabs.len() > 12 {
+                    self.tabs.remove(0);
+                }
+            }
         }
         self.session.symbols.clear();
         self.session.selected = None;
         self.editor = input::Editor::default();
         self.consumed.clear();
         self.typed_since_recog = false;
+        self.selection.clear();
+        self.lasso.clear();
+        self.editing = None;
+        self.dirty = dirty::ALL;
     }
 
     /// Push canvas ink and paper into the workspace (autosave picks it up).
-    fn sync_ws(&mut self) {
+    pub fn sync_ws(&mut self) {
         let now = self.now_ms();
         let (strokes, kind, spacing) = (self.doc.strokes.clone(), self.paper.kind.name().to_lowercase(), self.paper.spacing);
         if let Some(ws) = &mut self.ws {
             ws.set_strokes(strokes, now);
             ws.set_paper(&kind, spacing);
         }
+        self.dirty |= dirty::CANVAS;
+    }
+
+    /// Open a page, recording navigation history (back/forward) unless `nav` is false.
+    pub fn goto_page(&mut self, id: &str, nav: bool) -> Result<(), String> {
+        self.sync_ws();
+        let now = self.now_ms();
+        let cur = self.ws.as_ref().map(|w| w.page.id.clone());
+        if cur.as_deref() == Some(id) {
+            return Ok(());
+        }
+        let res = self.ws.as_mut().map(|w| w.open_page(id, now)).unwrap_or(Ok(()));
+        match res {
+            Ok(()) => {
+                if nav {
+                    if let Some(c) = cur {
+                        self.back.push(c);
+                        if self.back.len() > 100 {
+                            self.back.remove(0);
+                        }
+                    }
+                    self.fwd.clear();
+                }
+                self.load_page_into_doc();
+                Ok(())
+            }
+            Err(e) => Err(format!("Could not open page: {e}")),
+        }
+    }
+
+    pub fn set_status(&mut self, s: impl Into<String>) {
+        self.status = s.into();
+        self.dirty |= dirty::TOOLS;
     }
 }
 
-fn model<T: Clone + 'static>(v: Vec<T>) -> ModelRc<T> {
+pub fn paper_kind(s: &str) -> PaperKind {
+    match s {
+        "blank" => PaperKind::Blank,
+        "grid" => PaperKind::Grid,
+        "dots" => PaperKind::Dots,
+        "engineering" => PaperKind::Engineering,
+        "polar" => PaperKind::Polar,
+        _ => PaperKind::Lined,
+    }
+}
+
+/// PDF page backgrounds are stored as PNG rendered at 2 px per pt.
+pub const PDF_RENDER_SCALE: f32 = 2.0;
+
+fn decode_background(png: &[u8]) -> Option<Background> {
+    let pm = tiny_skia::Pixmap::decode_png(png).ok()?;
+    Some(Background { pm, scale: PDF_RENDER_SCALE })
+}
+
+pub fn model<T: Clone + 'static>(v: Vec<T>) -> ModelRc<T> {
     ModelRc::new(VecModel::from(v))
 }
 
-fn refresh(ui: &MainWindow, st: &State) {
+fn color(c: [u8; 3]) -> slint::Color {
+    slint::Color::from_rgb_u8(c[0], c[1], c[2])
+}
+
+pub fn image_of(r: &render::Rendered) -> slint::Image {
+    slint::Image::from_rgba8_premultiplied(SharedPixelBuffer::clone_from_slice(&r.rgba_premul, r.width, r.height))
+}
+
+/// Apply theme colours and UI scale to the Slint `Theme` global.
+pub fn apply_theme(ui: &MainWindow, st: &State) {
+    let c = st.settings.colors();
+    let t = ui.global::<Theme>();
+    let mix = |a: [u8; 3], b: [u8; 3], f: f32| -> [u8; 3] { [0, 1, 2].map(|i| (a[i] as f32 * (1.0 - f) + b[i] as f32 * f) as u8) };
+    t.set_bg(color(c.bg));
+    t.set_surface(color(c.surface));
+    t.set_panel(color(c.panel));
+    t.set_hover(color(mix(c.surface, c.accent, 0.25)));
+    t.set_text(color(c.text));
+    t.set_muted(color(c.muted));
+    t.set_accent(color(c.accent));
+    t.set_urgent(color(c.urgent));
+    t.set_on_accent(color(if mix(c.accent, [0; 3], 0.0).iter().map(|&v| v as u32).sum::<u32>() > 380 { [0x10, 0x10, 0x18] } else { [0xff, 0xff, 0xff] }));
+    t.set_dark(c.is_dark());
+    let scale = st.settings.ui_scale * if st.settings.tablet_mode { 1.25 } else { 1.0 };
+    t.set_scale(scale);
+    ui.set_dark_scheme(c.is_dark());
+    ui.set_theme_name(st.settings.theme.as_str().into());
+    ui.set_ui_scale(st.settings.ui_scale);
+    ui.set_tablet_mode(st.settings.tablet_mode);
+    ui.set_spell_check(st.settings.spell_check);
+    ui.set_snap_shapes(st.settings.snap_shapes);
+    ui.set_backup_daily(st.settings.backup_daily);
+    st.graph_dark_hint(c.is_dark());
+}
+
+impl State {
+    fn graph_dark_hint(&self, _dark: bool) {}
+}
+
+fn refresh_canvas(ui: &MainWindow, st: &mut State) {
     let scale = ui.window().scale_factor();
     let (w, h) = st.size;
-    let live = (!st.live.is_empty() && st.tool != Tool::Eraser).then(|| st.live_stroke());
-    let img = raster::render(st.doc.strokes.iter().chain(live.iter()), st.view, (w as f32 * scale) as u32, (h as f32 * scale) as u32, scale, [0x1a, 0x1b, 0x26], st.paper);
+    let live = (!st.live.is_empty() && matches!(st.tool, Tool::Pen | Tool::Highlighter)).then(|| st.live_stroke());
+    let bg = st.settings.colors().bg;
+    let page = st.ws.as_ref().and_then(|ws| raster::page_size(match ws.page.mode { store::PageMode::Letter => "letter", store::PageMode::A4 => "a4", _ => "" }));
+    let sel = if st.selection.is_empty() {
+        None
+    } else {
+        let pts: Vec<Point> = st.doc.strokes.iter().filter(|s| st.selection.contains(&s.id)).flat_map(|s| s.points.iter().copied()).collect();
+        ink::bbox(&pts)
+    };
+    let light = st.light();
+    let ov = Overlay { lasso: &st.lasso, selection: sel, light };
+    let img = st.canvas.frame(&st.doc.strokes, live.as_ref(), st.view, ((w as f32 * scale) as u32, (h as f32 * scale) as u32), scale, bg, st.paper, page, st.background.as_ref(), &ov);
     ui.set_frame(img);
     ui.set_can_undo(st.doc.can_undo());
     ui.set_can_redo(st.doc.can_redo());
+    ui.set_has_selection(!st.selection.is_empty());
 }
 
-fn refresh_sidebar(ui: &MainWindow, st: &State) {
-    let Some(ws) = &st.ws else { return };
-    let rows: Vec<PageRow> = ws.rows().into_iter().map(|r| PageRow { id: r.id.into(), title: r.title.into(), detail: r.section.into(), current: r.is_current }).collect();
+fn refresh_sidebar(ui: &MainWindow, st: &mut State) {
+    let Some(ws) = &mut st.ws else { return };
+    let filter = ui.get_filter_index();
+    let recent: Vec<String> = ws.store.recent().into_iter().filter(|(n, _)| *n == ws.nb.id).map(|(_, p)| p).collect();
+    let mut rows: Vec<PageRow> = Vec::new();
+    let pages_meta: Vec<(String, bool)> = Vec::new();
+    let _ = pages_meta;
+    for r in ws.rows() {
+        let fav = !r.is_section && (r.is_current && ws.page.favorite || favorites_cache(ws, &r.id));
+        let keep = match filter {
+            1 => r.is_section || fav,
+            2 => r.is_section || recent.contains(&r.id),
+            _ => true,
+        };
+        if keep {
+            rows.push(PageRow { id: r.id.into(), title: r.title.into(), detail: SharedString::new(), current: r.is_current, favorite: fav, is_section: r.is_section, section: r.section.into() });
+        }
+    }
+    if filter == 2 {
+        // recent: most recent first, sections hidden
+        let mut pages: Vec<PageRow> = rows.into_iter().filter(|r| !r.is_section).collect();
+        pages.sort_by_key(|r| recent.iter().position(|p| p.as_str() == r.id.as_str()).unwrap_or(usize::MAX));
+        rows = pages;
+    }
     ui.set_pages(model(rows));
     ui.set_page_title(ws.page.title.as_str().into());
+    ui.set_page_favorite(ws.page.favorite);
+    ui.set_page_tags(ws.page.tags.join(", ").into());
+    let metas = ws.notebooks();
+    let labels: Vec<SharedString> = metas.iter().map(|m| ws.notebook_label(m).into()).collect();
+    ui.set_notebook_index(metas.iter().position(|m| m.id == ws.nb.id).unwrap_or(0) as i32);
+    ui.set_notebooks(model(labels));
+    ui.set_templates(model(ws.templates().into_iter().map(SharedString::from).collect()));
+    ui.set_can_back(!st.back.is_empty());
+    ui.set_can_forward(!st.fwd.is_empty());
 }
 
-fn refresh_graph(ui: &MainWindow, st: &State) {
+/// Favourite flags are stored in each page; cache them per page id so the sidebar does not load
+/// every page on every refresh.
+fn favorites_cache(ws: &Workspace, id: &str) -> bool {
+    thread_local! {
+        static FAV: RefCell<std::collections::HashMap<String, bool>> = RefCell::new(Default::default());
+    }
+    if id == ws.page.id {
+        FAV.with(|f| f.borrow_mut().insert(id.to_string(), ws.page.favorite));
+        return ws.page.favorite;
+    }
+    FAV.with(|f| {
+        if let Some(v) = f.borrow().get(id) {
+            return *v;
+        }
+        let v = ws.load_other(id).is_some_and(|p| p.favorite);
+        f.borrow_mut().insert(id.to_string(), v);
+        v
+    })
+}
+
+fn block_rows(st: &mut State, page: &store::Page, scale: f32) -> Vec<BlockRow> {
+    let media = st.ws.as_ref().map(|w| w.page_media(page)).unwrap_or_default();
+    let text = st.settings.colors().text;
+    let width = st.doc_width;
+    page.blocks
+        .iter()
+        .enumerate()
+        .map(|(i, b)| {
+            let r = st.blocks.render(b, &media, width, scale, text);
+            let (image, has_image, error) = match r {
+                pagedoc::Render::Ok(px) => (image_of(&px), true, String::new()),
+                pagedoc::Render::Err(e) => (slint::Image::default(), false, e),
+            };
+            BlockRow { idx: i as i32, kind: pagedoc::kind(b).into(), image, has_image, text: pagedoc::edit_text(b).into(), error: error.into() }
+        })
+        .collect()
+}
+
+fn refresh_doc(ui: &MainWindow, st: &mut State) {
+    let scale = ui.window().scale_factor();
+    let Some(page) = st.ws.as_ref().map(|w| w.page.clone()) else { return };
+    let rows = block_rows(st, &page, scale);
+    ui.set_blocks(model(rows));
+    ui.set_word_count(format!("{} words", pagedoc::word_count(&page)).into());
+    let mut outline: Vec<ItemRow> = pagedoc::outline(&page).into_iter().map(|(i, lvl, t)| ItemRow { id: i.to_string().into(), title: format!("{}{t}", "  ".repeat(lvl - 1)).into(), detail: SharedString::new() }).collect();
+    outline.extend(pagedoc::links(&page).into_iter().map(|t| ItemRow { id: format!("link:{t}").into(), title: format!("→ {t}").into(), detail: SharedString::new() }));
+    ui.set_outline(model(outline));
+    let back = st.ws.as_mut().map(|w| w.backlinks()).unwrap_or_default();
+    ui.set_backlinks(model(back.into_iter().map(|(id, t)| ItemRow { id: id.into(), title: t.into(), detail: SharedString::new() }).collect()));
+    ui.set_editing_index(st.editing.map_or(-1, |i| i as i32));
+    // split view
+    let split = st.split.clone().and_then(|id| st.ws.as_ref().and_then(|w| w.load_other(&id)));
+    match split {
+        Some(p) => {
+            let rows = block_rows(st, &p, scale);
+            ui.set_split_blocks(model(rows));
+            ui.set_split_title(p.title.as_str().into());
+            ui.set_split_active(true);
+        }
+        None => ui.set_split_active(false),
+    }
+    ui.set_page_mode_name(match page.mode { store::PageMode::Letter => "Letter", store::PageMode::A4 => "A4", store::PageMode::Infinite => "Infinite" }.into());
+    ui.set_has_audio(page.audio.is_some());
+}
+
+fn refresh_tabs(ui: &MainWindow, st: &mut State) {
+    let Some(ws) = &st.ws else { return };
+    let ids = ws.page_ids();
+    st.tabs.retain(|t| ids.contains(t));
+    let rows: Vec<TabRow> = st.tabs.iter().map(|id| TabRow { id: id.as_str().into(), title: ws.title_of(id).unwrap_or_default().into(), current: *id == ws.page.id }).collect();
+    ui.set_tabs(model(rows));
+}
+
+fn refresh_tools(ui: &MainWindow, st: &State) {
+    ui.set_tool(match st.tool { Tool::Pen => "pen", Tool::Highlighter => "highlighter", Tool::Eraser => "eraser", Tool::Lasso => "lasso" }.into());
+    ui.set_mode(if st.mode == InkMode::Drawing { "drawing" } else { "math" }.into());
+    ui.set_pixel_erase(st.eraser_mode == EraserMode::Pixel);
+    ui.set_smoothing(st.settings.smoothing);
+    ui.set_stroke_width(st.settings.width);
+    ui.set_recog_delay(st.settings.recog_delay_ms as f32);
+    ui.set_paper_name(st.paper.kind.name().into());
+    ui.set_paper_spacing(st.paper.spacing);
+    ui.set_typing(st.typing);
+    ui.set_training(st.training);
+    ui.set_recording(st.recorder.is_some());
+    ui.set_status(st.status.as_str().into());
+    let first = if st.light() { [0x1f, 0x23, 0x35] } else { PALETTE[0] };
+    let mut sw: Vec<[u8; 3]> = std::iter::once(first).chain(PALETTE[1..].iter().copied()).collect();
+    sw.extend(st.settings.custom_colors.iter().copied());
+    ui.set_swatches(model(sw.iter().map(|c| SwatchRow { r: c[0] as i32, g: c[1] as i32, b: c[2] as i32, active: *c == st.color }).collect()));
+    ui.set_pens(model(st.settings.pens.iter().map(|p| SwatchRow { r: p.rgb[0] as i32, g: p.rgb[1] as i32, b: p.rgb[2] as i32, active: false }).collect()));
+    ui.set_active_pen(st.active_pen.map_or(-1, |i| i as i32));
+    ui.set_rebinding(st.rebinding.clone().unwrap_or_default().into());
+}
+
+/// Refresh whatever the last change marked dirty.
+pub fn flush(ui: &MainWindow, st: &mut State) {
+    let d = std::mem::take(&mut st.dirty);
+    if d & dirty::TOOLS != 0 {
+        refresh_tools(ui, st);
+    }
+    if d & dirty::SIDEBAR != 0 {
+        refresh_sidebar(ui, st);
+    }
+    if d & dirty::TABS != 0 {
+        refresh_tabs(ui, st);
+    }
+    if d & dirty::DOC != 0 {
+        refresh_doc(ui, st);
+    }
+    if d & dirty::STRIP != 0 {
+        update_strip(ui, st);
+    }
+    if d & dirty::CANVAS != 0 {
+        refresh_canvas(ui, st);
+    }
+}
+
+pub fn refresh_graph(ui: &MainWindow, st: &State) {
     let f = st.graph.frame();
     let mut buf = SharedPixelBuffer::<slint::Rgba8Pixel>::new(f.width, f.height);
     buf.make_mut_bytes().copy_from_slice(&f.rgba);
@@ -185,32 +546,48 @@ fn refresh_graph(ui: &MainWindow, st: &State) {
     ui.set_graph_info(st.graph.info().into());
 }
 
-fn update_strip(ui: &MainWindow, st: &State) {
+pub fn update_strip(ui: &MainWindow, st: &State) {
     let cands: Vec<SharedString> = st.session.selected.and_then(|i| st.session.symbols.get(i)).map(|s| s.cands.iter().map(|c| SharedString::from(c.label.as_str())).collect()).unwrap_or_default();
     ui.set_candidates(model(cands));
     update_expr(ui, st);
 }
 
-/// The expression line: typed/drawn expression as Typst text plus a Typst-rendered image.
-fn update_expr(ui: &MainWindow, st: &State) {
-    let e = if st.typing || st.typed_since_recog || !st.editor.expr().is_empty() { st.editor.expr() } else { st.session.expression() };
+/// The expression being built: typed and drawn input share it.
+pub fn current_expr(st: &State) -> layout::Expr {
+    if st.typing || st.typed_since_recog || !st.editor.expr().is_empty() {
+        st.editor.expr()
+    } else {
+        st.session.expression()
+    }
+}
+
+/// The expression line: Typst text plus a Typst-rendered image, and autocomplete suggestions.
+pub fn update_expr(ui: &MainWindow, st: &State) {
+    let sugg: Vec<ItemRow> = if st.typing && !st.editor.pending_word().is_empty() {
+        st.editor.suggestions(6).into_iter().map(|s| ItemRow { id: s.name.as_str().into(), title: s.name.as_str().into(), detail: s.preview.as_str().into() }).collect()
+    } else {
+        vec![]
+    };
+    ui.set_suggestions(model(sugg));
+    let e = current_expr(st);
     if e.is_empty() {
-        ui.set_expr_text("".into());
+        ui.set_expr_text(if st.typing && !st.editor.pending_word().is_empty() { format!("typing: {}", st.editor.pending_word()).into() } else { "".into() });
         ui.set_has_expr_image(false);
         return;
     }
     let typst = e.to_typst();
     ui.set_expr_text(format!("= {typst}").into());
-    match st.math_cache.render(&typst, 16.0, [0xc0, 0xca, 0xf5], ui.window().scale_factor()) {
+    let c = st.settings.colors().text;
+    match st.math_cache.render(&typst, 16.0 * st.settings.ui_scale, c, ui.window().scale_factor()) {
         Ok(r) => {
-            ui.set_expr_image(slint::Image::from_rgba8_premultiplied(SharedPixelBuffer::clone_from_slice(&r.rgba_premul, r.width, r.height)));
+            ui.set_expr_image(image_of(&r));
             ui.set_has_expr_image(true);
         }
         Err(_) => ui.set_has_expr_image(false),
     }
 }
 
-fn update_training_ui(ui: &MainWindow, st: &mut State) {
+pub fn update_training_ui(ui: &MainWindow, st: &mut State) {
     if st.train_labels.is_empty() {
         st.train_labels = st.session.labels();
     }
@@ -237,28 +614,31 @@ fn feed_editor(st: &mut State) {
 }
 
 /// Auto/manual recognition. In training mode it stores the drawn symbols for the target label.
-fn run_recognition(ui: &MainWindow, st: &mut State) {
+pub fn run_recognition(ui: &MainWindow, st: &mut State) {
     if st.training {
         let Some(label) = st.train_labels.get(st.train_idx).cloned() else { return };
         match st.session.train(&label, &st.doc.strokes) {
             Ok(ids) if !ids.is_empty() => {
                 st.doc.remove_ids(&ids);
-                ui.set_status("Saved".into());
+                st.set_status(format!("Saved a sample of {label}"));
+                st.sync_ws();
             }
             Ok(_) => {}
-            Err(e) => ui.set_status(e.into()),
+            Err(e) => st.set_status(e),
         }
         update_training_ui(ui, st);
         return;
     }
     match st.session.recognize(&st.doc.strokes) {
         Ok(()) => {
-            ui.set_status(if st.session.symbols.is_empty() { "Nothing to recognize".into() } else { "".into() });
+            if st.session.symbols.is_empty() && st.doc.strokes.iter().any(|s| s.mode == InkMode::MathText) {
+                st.set_status("Nothing to recognize");
+            }
             feed_editor(st);
         }
-        Err(e) => ui.set_status(format!("Recognizer failed to load: {e}").into()),
+        Err(e) => st.set_status(format!("Recognizer failed to load: {e}")),
     }
-    update_strip(ui, st);
+    st.dirty |= dirty::STRIP;
     tablet::push_state(st);
 }
 
@@ -266,205 +646,173 @@ fn main() -> Result<(), slint::PlatformError> {
     if std::env::args().any(|a| a == "--self-test") {
         std::process::exit(selftest::run());
     }
+    if std::env::args().any(|a| a == "--version") {
+        println!("scrawl {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
     let shot_path = std::env::var("SCRAWL_SHOT").ok();
     let shot_size: (u32, u32) = std::env::var("SCRAWL_SHOT_SIZE")
         .ok()
         .and_then(|v| v.split_once('x').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?))))
         .unwrap_or((1500, 900));
-    let shot_window = shot_path.as_ref().map(|_| headless::install(shot_size.0, shot_size.1));
+    let shot_scale: f32 = std::env::var("SCRAWL_SHOT_SCALE").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0);
+    let shot_window = shot_path.as_ref().map(|_| headless::install(shot_size.0, shot_size.1, shot_scale));
+    let mut settings = if shot_path.is_some() { Settings::default() } else { Settings::load() };
+    if let Ok(t) = std::env::var("SCRAWL_SHOT_THEME") {
+        settings.theme = t;
+    }
     let ui = MainWindow::new()?;
-    let st = Rc::new(RefCell::new(State::new()));
+    let st = Rc::new(RefCell::new(State::new(settings)));
     let weak = ui.as_weak();
 
     {
-        let s = st.borrow();
-        ui.set_templates(model(store::templates::BUILTIN.iter().map(|t| SharedString::from(*t)).collect()));
+        let mut s = st.borrow_mut();
+        apply_theme(&ui, &s);
         ui.set_export_formats(model(["PDF", "PNG", "Markdown", "Typst", "LaTeX", "HTML"].iter().map(|t| SharedString::from(*t)).collect()));
-        ui.set_paper_name(s.paper.kind.name().into());
-        ui.set_paper_spacing(s.paper.spacing);
-        refresh_sidebar(&ui, &s);
+        ui.set_show_sidebar(s.settings.show_sidebar);
+        ui.set_show_doc(s.settings.show_doc);
+        let mut dt = slint::DataTransfer::default();
+        dt.set_plain_text("scrawl-page".into());
+        ui.set_drag_data(dt);
         refresh_graph(&ui, &s);
         if let Some(msg) = s.ws.as_ref().and_then(|w| w.recovered.clone()) {
-            ui.set_status(msg.into());
+            s.set_status(msg);
+        }
+        if s.ws.is_none() {
+            s.set_status(format!("Could not open the notes folder {}", workspace::default_root().display()));
+        }
+        flush(&ui, &mut s);
+        if let Some((w, h)) = s.settings.window.filter(|_| shot_path.is_none()) {
+            ui.window().set_size(slint::LogicalSize::new(w as f32, h as f32));
+        }
+        if s.settings.maximized && shot_path.is_none() {
+            ui.window().set_maximized(true);
         }
     }
 
-    // Run a state mutation, then redraw. Closure params after `s` mirror the Slint callback args.
+    // Run a state mutation, then refresh what it marked dirty.
     macro_rules! with {
         (|$ui:ident, $s:ident $(, $a:pat_param = $t:ty)*| $body:expr) => {{
             let st = st.clone();
             let weak = weak.clone();
             move |$($a: $t),*| {
-                let $ui = weak.upgrade().unwrap();
-                {
-                    let $s = &mut *st.borrow_mut();
-                    let _ = &$ui;
-                    $body
-                }
-                refresh(&$ui, &st.borrow());
-            }
-        }};
-    }
-    // Same, but without redrawing the ink canvas (graph / sidebar / tablet callbacks).
-    macro_rules! quiet {
-        (|$ui:ident, $s:ident $(, $a:pat_param = $t:ty)*| $body:expr) => {{
-            let st = st.clone();
-            let weak = weak.clone();
-            move |$($a: $t),*| {
-                let $ui = weak.upgrade().unwrap();
+                let Some($ui) = weak.upgrade() else { return };
                 let $s = &mut *st.borrow_mut();
                 let _ = &$ui;
-                $body
+                $body;
+                flush(&$ui, $s);
             }
         }};
     }
 
+    ui.on_window_resized(with!(|_ui, s, w = f32, h = f32| {
+        s.settings.window = Some((w as u32, h as u32));
+    }));
     ui.on_canvas_resized(with!(|_ui, s, w = f32, h = f32| {
         s.size = (w.max(1.0) as u32, h.max(1.0) as u32);
+        s.dirty |= dirty::CANVAS;
     }));
 
-    ui.on_pointer_down(with!(|_ui, s, x = f32, y = f32| {
-        let (px, py) = s.view.to_page(x, y);
-        s.down_at = Some(Instant::now());
-        s.t0_ms = s.epoch.elapsed().as_millis() as u64;
-        match s.tool {
-            Tool::Eraser => s.eraser_path = vec![(px, py)],
-            _ => s.live = vec![Point::new(px, py, 0)],
-        }
-    }));
-
-    ui.on_pointer_move(with!(|_ui, s, x = f32, y = f32| {
-        let Some(t0) = s.down_at else { return };
-        let (px, py) = s.view.to_page(x, y);
-        match s.tool {
-            Tool::Eraser => s.eraser_path.push((px, py)),
-            _ => {
-                let t = t0.elapsed().as_millis() as u32;
-                s.live.push(Point::new(px, py, t));
-            }
-        }
-    }));
-
-    let up_inner = with!(|ui, s| {
-        if s.down_at.take().is_none() {
-            return;
-        }
-        match s.tool {
-            Tool::Eraser => {
-                let path = std::mem::take(&mut s.eraser_path);
-                let r = (s.width * 2.0 + 4.0) / s.view.scale;
-                let mode = s.eraser_mode;
-                s.doc.erase_path(&path, r, mode);
-            }
-            tool => {
-                let raw = std::mem::take(&mut s.live);
-                if tool == Tool::Pen && is_scribble(&raw) {
-                    let path: Vec<(f32, f32)> = raw.iter().map(|p| (p.x, p.y)).collect();
-                    let n = s.doc.erase_path(&path, s.width + 3.0, EraserMode::Stroke);
-                    ui.set_status(format!("Scribble deleted {n} stroke(s)").into());
-                } else if !raw.is_empty() {
-                    let pts = smooth_stroke(&raw, SmoothingConfig { strength: s.smoothing });
-                    let mut stroke = s.live_stroke();
-                    stroke.points = pts;
-                    stroke.id = 0;
-                    s.doc.add_stroke(stroke);
-                    ui.set_status("".into());
-                }
-            }
-        }
-        s.sync_ws();
-    });
+    ui.on_pointer_down(with!(|_ui, s, x = f32, y = f32| actions::pointer_down(s, x, y)));
+    ui.on_pointer_move(with!(|_ui, s, x = f32, y = f32| actions::pointer_move(s, x, y)));
     {
-        let w = weak.clone();
+        let (st2, w) = (st.clone(), weak.clone());
         ui.on_pointer_up(move || {
-            up_inner();
-            if let Some(ui) = w.upgrade() {
+            let Some(ui) = w.upgrade() else { return };
+            let schedule = {
+                let s = &mut *st2.borrow_mut();
+                let r = actions::pointer_up(&ui, s);
+                flush(&ui, s);
+                r
+            };
+            if schedule {
                 ui.invoke_pen_lifted();
             }
         });
     }
 
-    ui.on_zoom(with!(|_ui, s, f = f32, x = f32, y = f32| s.view.zoom_at(f, x, y)));
+    ui.on_zoom(with!(|_ui, s, f = f32, x = f32, y = f32| {
+        s.view.zoom_at(f, x, y);
+        s.dirty |= dirty::CANVAS;
+    }));
     ui.on_pan(with!(|_ui, s, dx = f32, dy = f32| {
         s.view.ox += dx;
         s.view.oy += dy;
+        s.dirty |= dirty::CANVAS;
     }));
-    ui.on_set_tool(with!(|ui, s, t = SharedString| {
-        s.tool = match t.as_str() {
-            "highlighter" => Tool::Highlighter,
-            "eraser" => Tool::Eraser,
-            _ => Tool::Pen,
-        };
-        ui.set_tool(t);
-    }));
-    ui.on_set_mode(with!(|ui, s, m = SharedString| {
+    ui.on_set_tool(with!(|_ui, s, t = SharedString| actions::set_tool(s, &t)));
+    ui.on_set_mode(with!(|_ui, s, m = SharedString| {
         s.mode = if m == "drawing" { InkMode::Drawing } else { InkMode::MathText };
-        ui.set_mode(m);
+        s.dirty |= dirty::TOOLS;
     }));
-    ui.on_toggle_pixel_erase(with!(|ui, s| {
+    ui.on_toggle_pixel_erase(with!(|_ui, s| {
         s.eraser_mode = if s.eraser_mode == EraserMode::Stroke { EraserMode::Pixel } else { EraserMode::Stroke };
-        ui.set_pixel_erase(s.eraser_mode == EraserMode::Pixel);
+        s.dirty |= dirty::TOOLS;
     }));
-    ui.on_undo(with!(|_ui, s| {
-        s.doc.undo();
+    ui.on_set_smoothing(with!(|_ui, s, v = f32| {
+        s.settings.smoothing = v.clamp(0.0, 1.0);
+        s.dirty |= dirty::TOOLS;
+    }));
+    ui.on_set_width(with!(|_ui, s, v = f32| {
+        s.settings.width = v.clamp(0.5, 24.0);
+        s.active_pen = None;
+        s.dirty |= dirty::TOOLS;
+    }));
+    ui.on_set_swatch(with!(|_ui, s, i = i32| {
+        let first = if s.light() { [0x1f, 0x23, 0x35] } else { PALETTE[0] };
+        let all: Vec<[u8; 3]> = std::iter::once(first).chain(PALETTE[1..].iter().copied()).chain(s.settings.custom_colors.iter().copied()).collect();
+        if let Some(c) = all.get(i.max(0) as usize) {
+            s.color = *c;
+            s.active_pen = None;
+        }
+        s.dirty |= dirty::TOOLS;
+    }));
+    ui.on_set_custom_color(with!(|_ui, s, r = i32, g = i32, b = i32| {
+        let c = [r.clamp(0, 255) as u8, g.clamp(0, 255) as u8, b.clamp(0, 255) as u8];
+        s.color = c;
+        if !s.settings.custom_colors.contains(&c) {
+            s.settings.custom_colors.push(c);
+            if s.settings.custom_colors.len() > 8 {
+                s.settings.custom_colors.remove(0);
+            }
+        }
+        s.dirty |= dirty::TOOLS;
+    }));
+    ui.on_use_pen(with!(|_ui, s, i = i32| actions::run(&_ui, s, &format!("pen{}", i + 1))));
+    ui.on_save_pen(with!(|_ui, s, i = i32| {
+        if let Some(p) = s.settings.pens.get_mut(i.max(0) as usize) {
+            p.rgb = s.color;
+            p.width = s.settings.width;
+            p.highlighter = s.tool == Tool::Highlighter;
+            s.active_pen = Some(i as usize);
+            s.set_status(format!("Saved favourite pen {}", i + 1));
+        }
+    }));
+    ui.on_set_spacing(with!(|_ui, s, v = f32| {
+        s.paper.spacing = v.clamp(8.0, 128.0);
+        s.settings.paper_spacing = s.paper.spacing;
         s.sync_ws();
+        s.dirty |= dirty::TOOLS;
     }));
-    ui.on_redo(with!(|_ui, s| {
-        s.doc.redo();
-        s.sync_ws();
+    ui.on_set_paper_color(with!(|_ui, s, i = i32| {
+        const C: [[u8; 3]; 6] = [[0x41, 0x48, 0x68], [0x56, 0x5f, 0x89], [0x7a, 0xa2, 0xf7], [0x9e, 0xce, 0x6a], [0xe0, 0xaf, 0x68], [0xc0, 0xca, 0xf5]];
+        let c = C[(i.max(0) as usize).min(5)];
+        s.settings.paper_color = c;
+        s.paper.color = [c[0], c[1], c[2], 0xff];
+        s.dirty |= dirty::CANVAS;
     }));
-    ui.on_clear_all(with!(|ui, s| {
-        let ids: Vec<u64> = s.doc.strokes.iter().map(|x| x.id).collect();
-        s.doc.remove_ids(&ids);
-        s.session.symbols.clear();
-        s.session.selected = None;
-        s.editor = input::Editor::default();
-        s.consumed.clear();
-        s.typed_since_recog = false;
-        s.sync_ws();
-        update_strip(&ui, s);
-    }));
-    ui.on_set_smoothing(with!(|ui, s, v = f32| {
-        s.smoothing = v;
-        ui.set_smoothing(v);
-    }));
-    ui.on_set_width(with!(|ui, s, v = f32| {
-        s.width = v;
-        ui.set_stroke_width(v);
-    }));
-    ui.on_set_color(with!(|_ui, s, i = i32| {
-        s.color = (i as usize).min(PALETTE.len() - 1);
-    }));
-    ui.on_cycle_paper(with!(|ui, s| {
-        s.paper.kind = s.paper.kind.next();
-        ui.set_paper_name(s.paper.kind.name().into());
-        s.sync_ws();
-    }));
-    ui.on_set_spacing(with!(|ui, s, v = f32| {
-        s.paper.spacing = v;
-        ui.set_paper_spacing(v);
-        s.sync_ws();
-    }));
-    ui.on_recognize_now(with!(|ui, s| run_recognition(&ui, s)));
-    ui.on_set_delay(with!(|ui, s, v = f32| {
-        s.recog_delay_ms = v as u64;
-        ui.set_recog_delay(v);
+    ui.on_set_delay(with!(|_ui, s, v = f32| {
+        s.settings.recog_delay_ms = (v as u64).clamp(150, 5000);
+        s.dirty |= dirty::TOOLS;
     }));
     ui.on_choose(with!(|ui, s, i = i32| {
         if s.session.choose(i.max(0) as usize, &s.doc.strokes) {
             if !s.typed_since_recog {
                 s.editor.set_expr(s.session.expression());
             }
-            update_strip(&ui, s);
-            ui.set_status("Correction saved to your handwriting profile".into());
+            s.dirty |= dirty::STRIP;
+            s.set_status("Correction saved to your handwriting profile");
             tablet::push_state(s);
-        }
-    }));
-    ui.on_toggle_training(with!(|ui, s| {
-        s.training = !s.training;
-        ui.set_training(s.training);
-        if s.training {
-            update_training_ui(&ui, s);
         }
     }));
     ui.on_train_step(with!(|ui, s, d = i32| {
@@ -485,72 +833,74 @@ fn main() -> Result<(), slint::PlatformError> {
         update_training_ui(&ui, s);
     }));
 
+    // ---- keyboard: every shortcut goes through the (rebindable) command table ----------------
+    {
+        let (st2, w) = (st.clone(), weak.clone());
+        ui.on_shortcut(move |key, ctrl, alt, shift, meta| {
+            let Some(ui) = w.upgrade() else { return false };
+            let s = &mut *st2.borrow_mut();
+            let handled = actions::shortcut(&ui, s, &key, ctrl, alt, shift, meta);
+            flush(&ui, s);
+            handled
+        });
+    }
+    {
+        let (st2, w) = (st.clone(), weak.clone());
+        ui.on_plain_key(move |key| {
+            let Some(ui) = w.upgrade() else { return false };
+            let s = &mut *st2.borrow_mut();
+            let handled = actions::shortcut(&ui, s, &key, false, false, false, false);
+            flush(&ui, s);
+            handled
+        });
+    }
+    ui.on_run_command(with!(|ui, s, id = SharedString| actions::run(&ui, s, &id)));
+
     // ---- typing mode ------------------------------------------------------------------------
-    ui.on_toggle_typing(with!(|ui, s| {
-        s.typing = !s.typing;
-        ui.set_typing(s.typing);
-        update_expr(&ui, s);
-    }));
     ui.on_type_text(with!(|ui, s, t = SharedString| {
         s.editor.insert_str(&t);
         s.typed_since_recog = true;
-        update_expr(&ui, s);
+        s.dirty |= dirty::STRIP;
         tablet::push_state(s);
     }));
     ui.on_type_nav(with!(|ui, s, k = SharedString| {
         tablet::nav(s, k.as_str());
         s.typed_since_recog = true;
-        update_expr(&ui, s);
+        s.dirty |= dirty::STRIP;
+    }));
+    ui.on_type_paste(with!(|ui, s, t = SharedString| actions::type_paste(s, &t)));
+    ui.on_accept_suggestion(with!(|ui, s, name = SharedString| {
+        if let Some(sug) = s.editor.suggestions(20).into_iter().find(|x| x.name == name.as_str()) {
+            s.editor.accept(&sug);
+            s.typed_since_recog = true;
+        }
+        s.dirty |= dirty::STRIP;
     }));
 
     // ---- notes: pages, search, export ----------------------------------------------------------
     ui.on_open_page(with!(|ui, s, id = SharedString| {
-        s.sync_ws();
-        let now = s.now_ms();
-        let res = s.ws.as_mut().map(|w| w.open_page(&id, now));
-        match res {
-            Some(Ok(())) => {
-                s.load_page_into_doc();
-                ui.set_search_active(false);
-            }
-            Some(Err(e)) => ui.set_status(format!("Could not open page: {e}").into()),
-            None => {}
+        if let Err(e) = s.goto_page(&id, true) {
+            s.set_status(e);
         }
-        refresh_sidebar(&ui, s);
-        ui.set_paper_name(s.paper.kind.name().into());
-        update_strip(&ui, s);
+        ui.set_search_active(false);
     }));
-    ui.on_new_page(with!(|ui, s, t = SharedString| {
-        s.sync_ws();
-        let now = s.now_ms();
-        let res = s.ws.as_mut().map(|w| w.new_page(&t, now));
-        if let Some(Err(e)) = res {
-            ui.set_status(format!("Could not create page: {e}").into());
-        } else {
-            s.load_page_into_doc();
+    ui.on_open_tab(with!(|ui, s, id = SharedString| {
+        if let Err(e) = s.goto_page(&id, true) {
+            s.set_status(e);
         }
-        refresh_sidebar(&ui, s);
-        update_strip(&ui, s);
     }));
-    ui.on_delete_page(with!(|ui, s| {
-        let now = s.now_ms();
-        let res = s.ws.as_mut().map(|w| w.delete_current(now));
-        match res {
-            Some(Ok(())) => {
-                s.load_page_into_doc();
-                ui.set_status("Page moved to the trash (kept 30 days)".into());
-            }
-            Some(Err(e)) => ui.set_status(format!("Could not delete: {e}").into()),
-            None => {}
-        }
-        refresh_sidebar(&ui, s);
-        update_strip(&ui, s);
-    }));
+    ui.on_close_tab(with!(|ui, s, id = SharedString| actions::close_tab(s, &id)));
+    ui.on_new_page(with!(|ui, s, t = SharedString| actions::new_page(s, &t)));
     ui.on_rename_page(with!(|ui, s, t = SharedString| {
         if let Some(w) = &mut s.ws {
             w.rename(&t);
         }
-        refresh_sidebar(&ui, s);
+        s.dirty |= dirty::SIDEBAR | dirty::TABS;
+    }));
+    ui.on_set_tags(with!(|ui, s, t = SharedString| {
+        if let Some(w) = &mut s.ws {
+            w.set_tags(&t);
+        }
     }));
     ui.on_do_search(with!(|ui, s, q = SharedString| {
         if q.trim().is_empty() {
@@ -558,51 +908,166 @@ fn main() -> Result<(), slint::PlatformError> {
             return;
         }
         let hits = s.ws.as_mut().map(|w| w.search(q.trim())).unwrap_or_default();
-        let rows: Vec<PageRow> = hits.into_iter().map(|h| PageRow { id: h.page_id.into(), title: h.title.into(), detail: h.snippet.replace("<b>", "").replace("</b>", "").into(), current: false }).collect();
+        let rows: Vec<PageRow> = hits
+            .into_iter()
+            .map(|h| PageRow { id: h.page_id.into(), title: h.title.into(), detail: h.snippet.replace("<b>", "").replace("</b>", "").into(), current: false, favorite: false, is_section: false, section: SharedString::new() })
+            .collect();
         ui.set_search_results(model(rows));
         ui.set_search_active(true);
     }));
-    ui.on_export_page(with!(|ui, s, f = SharedString| {
-        s.sync_ws();
-        let fmt = match f.as_str() {
-            "PNG" => export::Format::Png,
-            "Markdown" => export::Format::Markdown,
-            "Typst" => export::Format::Typst,
-            "LaTeX" => export::Format::Latex,
-            "HTML" => export::Format::Html,
-            _ => export::Format::Pdf,
-        };
-        let now = s.now_ms();
-        let dir = workspace::default_root().join("exports");
-        let res = s.ws.as_mut().map(|w| w.export_current(fmt, &dir, now));
-        match res {
-            Some(Ok(p)) => ui.set_status(format!("Exported to {}", p.display()).into()),
-            Some(Err(e)) => ui.set_status(format!("Export failed: {e}").into()),
-            None => {}
+    ui.on_export_page(with!(|ui, s, f = SharedString| actions::export(s, &f)));
+    ui.on_set_notebook(with!(|ui, s, i = i32| actions::set_notebook(&ui, s, i)));
+    ui.on_set_filter(with!(|ui, s, i = i32| {
+        ui.set_filter_index(i);
+        s.dirty |= dirty::SIDEBAR;
+    }));
+    ui.on_move_row(with!(|ui, s, id = SharedString, d = i32| {
+        if let Some(w) = &mut s.ws {
+            let _ = w.move_page_step(&id, d);
+        }
+        s.dirty |= dirty::SIDEBAR;
+    }));
+    ui.on_drop_row(with!(|ui, s, src = SharedString, target = SharedString| {
+        if let Some(w) = &mut s.ws {
+            match w.drop_page(&src, &target) {
+                Ok(true) => s.status = "Page moved".into(),
+                Ok(false) => {}
+                Err(e) => s.status = format!("Could not move: {e}"),
+            }
+        }
+        s.dirty |= dirty::SIDEBAR | dirty::TOOLS;
+    }));
+
+    // ---- page blocks -------------------------------------------------------------------------
+    ui.on_block_action(with!(|ui, s, i = i32, a = SharedString| actions::block_action(&ui, s, i.max(0) as usize, &a)));
+    ui.on_editor_format(with!(|ui, s, f = SharedString| {
+        ui.set_editor_text(pagedoc::apply_format(&ui.get_editor_text(), &f).into());
+    }));
+    ui.on_editor_commit(with!(|ui, s| actions::editor_commit(&ui, s)));
+    ui.on_editor_cancel(with!(|ui, s| {
+        s.editing = None;
+        ui.set_editor_text("".into());
+        ui.set_spelling(model(vec![]));
+        s.dirty |= dirty::DOC;
+    }));
+    ui.on_fix_spelling(with!(|ui, s, from = SharedString, to = SharedString| {
+        ui.set_editor_text(pagedoc::replace_word(&ui.get_editor_text(), &from, &to).into());
+        actions::spell(&ui, s);
+    }));
+    ui.on_find_replace(with!(|ui, s, f = SharedString, r = SharedString, apply = bool| {
+        let n = s.ws.as_mut().map(|w| {
+            let n = pagedoc::find_replace(&mut w.page, &f, &r, apply);
+            if apply && n > 0 {
+                w.touch();
+                let (id, t) = (w.page.id.clone(), w.page.title.clone());
+                w.nb.rename_page(&id, &t);
+            }
+            n
+        });
+        let n = n.unwrap_or(0);
+        ui.set_find_info(if f.is_empty() { "".into() } else if apply { format!("Replaced {n}").into() } else { format!("{n} match(es) on this page").into() });
+        if apply {
+            s.dirty |= dirty::DOC | dirty::SIDEBAR;
+        }
+    }));
+    ui.on_goto_item(with!(|ui, s, id = SharedString| {
+        if let Some(title) = id.strip_prefix("link:") {
+            // follow a [[link]]; a link to a page that does not exist yet creates it
+            let target = s.ws.as_ref().and_then(|w| w.page_by_title(title));
+            match target {
+                Some(t) => {
+                    if let Err(e) = s.goto_page(&t, true) {
+                        s.set_status(e);
+                    }
+                }
+                None => {
+                    actions::new_page(s, "blank");
+                    if let Some(w) = &mut s.ws {
+                        w.rename(title);
+                    }
+                    s.set_status(format!("Created the linked page \"{title}\""));
+                    s.dirty |= dirty::SIDEBAR | dirty::TABS;
+                }
+            }
+        } else if let Ok(i) = id.parse::<usize>() {
+            s.editing = Some(i);
+            let text = s.ws.as_ref().and_then(|w| w.page.blocks.get(i)).map(pagedoc::edit_text).unwrap_or_default();
+            ui.set_editor_text(text.into());
+            s.dirty |= dirty::DOC;
         }
     }));
 
-    // ---- graph -------------------------------------------------------------------------------
-    ui.on_toggle_graph(quiet!(|ui, s| {
-        let on = !ui.get_graph_mode();
-        ui.set_graph_mode(on);
-        if on {
-            refresh_graph(&ui, s);
-        }
+    // ---- overlays ------------------------------------------------------------------------------
+    ui.on_overlay_query(with!(|ui, s, q = SharedString| actions::overlay_query(&ui, s, &q)));
+    ui.on_overlay_pick(with!(|ui, s, id = SharedString| actions::overlay_pick(&ui, s, &id)));
+    ui.on_overlay_closed(with!(|ui, s| {
+        s.overlay.clear();
+        s.rebinding = None;
+        s.prompt = None;
+        s.history_pick = None;
+        ui.set_has_preview(false);
+        s.dirty |= dirty::TOOLS;
     }));
-    ui.on_graph_text_edited(quiet!(|ui, s, t = SharedString| {
+    ui.on_prompt_ok(with!(|ui, s, t = SharedString| actions::prompt_ok(&ui, s, &t)));
+    ui.on_insert_symbol(with!(|ui, s, sym = SharedString| actions::insert_symbol(&ui, s, &sym)));
+    ui.on_start_rebind(with!(|ui, s, id = SharedString| {
+        s.rebinding = Some(id.to_string());
+        s.dirty |= dirty::TOOLS;
+    }));
+    ui.on_reset_shortcuts(with!(|ui, s| {
+        s.settings.shortcuts.clear();
+        actions::overlay_query(&ui, s, "");
+        s.set_status("Shortcuts reset to defaults");
+    }));
+
+    // ---- settings ------------------------------------------------------------------------------
+    ui.on_set_theme(with!(|ui, s, t = SharedString| {
+        s.settings.theme = t.to_string();
+        if s.settings.theme == "custom" && s.settings.custom == settings::ThemeColors::dark() {
+            s.settings.custom = settings::ThemeColors::dark();
+        }
+        actions::theme_changed(&ui, s);
+    }));
+    ui.on_set_custom_theme(with!(|ui, s, part = SharedString, r = i32, g = i32, b = i32| {
+        let c = [r.clamp(0, 255) as u8, g.clamp(0, 255) as u8, b.clamp(0, 255) as u8];
+        let t = &mut s.settings.custom;
+        match part.as_str() {
+            "bg" => t.bg = c,
+            "surface" => t.surface = c,
+            "panel" => t.panel = c,
+            "text" => t.text = c,
+            "accent" => t.accent = c,
+            "urgent" => t.urgent = c,
+            _ => {}
+        }
+        actions::theme_changed(&ui, s);
+    }));
+    ui.on_set_ui_scale(with!(|ui, s, v = f32| {
+        s.settings.ui_scale = (v * 20.0).round() / 20.0;
+        s.settings.sanitize();
+        actions::theme_changed(&ui, s);
+    }));
+    ui.on_toggle_setting(with!(|ui, s, which = SharedString| {
+        match which.as_str() {
+            "tablet-mode" => s.settings.tablet_mode = !s.settings.tablet_mode,
+            "snap" => s.settings.snap_shapes = !s.settings.snap_shapes,
+            "spell" => s.settings.spell_check = !s.settings.spell_check,
+            "backup" => s.settings.backup_daily = !s.settings.backup_daily,
+            _ => {}
+        }
+        actions::theme_changed(&ui, s);
+    }));
+
+    // ---- graph -------------------------------------------------------------------------------
+    ui.on_graph_text_edited(with!(|ui, s, t = SharedString| {
         s.graph.set_text(&t);
         refresh_graph(&ui, s);
     }));
-    ui.on_graph_set_param(quiet!(|ui, s, n = SharedString, v = f32| {
+    ui.on_graph_set_param(with!(|ui, s, n = SharedString, v = f32| {
         s.graph.graph.set_param(&n, v as f64);
-        let (frame, info) = (s.graph.frame(), s.graph.info());
-        let mut buf = SharedPixelBuffer::<slint::Rgba8Pixel>::new(frame.width, frame.height);
-        buf.make_mut_bytes().copy_from_slice(&frame.rgba);
-        ui.set_graph_frame(slint::Image::from_rgba8_premultiplied(buf));
-        ui.set_graph_info(info.into());
+        refresh_graph(&ui, s);
     }));
-    ui.on_graph_pointer(quiet!(|ui, s, kind = i32, x = f32, y = f32| {
+    ui.on_graph_pointer(with!(|ui, s, kind = i32, x = f32, y = f32| {
         match kind {
             0 => s.graph_drag = Some((x, y)),
             1 => {
@@ -615,27 +1080,21 @@ fn main() -> Result<(), slint::PlatformError> {
             _ => s.graph_drag = None,
         }
     }));
-    ui.on_graph_zoom(quiet!(|ui, s, f = f32, x = f32, y = f32| {
+    ui.on_graph_zoom(with!(|ui, s, f = f32, x = f32, y = f32| {
         let (w, h) = (s.graph.size.0 as f64, s.graph.size.1 as f64);
         s.graph.vp.zoom_at(f as f64, x as f64, y as f64, w, h);
         refresh_graph(&ui, s);
     }));
-    ui.on_graph_resized(quiet!(|ui, s, w = f32, h = f32| {
+    ui.on_graph_resized(with!(|ui, s, w = f32, h = f32| {
         s.graph.size = (w.max(50.0) as u32, h.max(50.0) as u32);
         refresh_graph(&ui, s);
     }));
-    ui.on_graph_run_matlab(quiet!(|ui, s, script = SharedString| {
+    ui.on_graph_run_matlab(with!(|ui, s, script = SharedString| {
         let out = s.graph.run_matlab(&script);
         ui.set_graph_out(out.into());
         refresh_graph(&ui, s);
     }));
-    ui.on_graph_load_mat(quiet!(|ui, s, path = SharedString| {
-        let out = match std::fs::read(path.trim()) {
-            Ok(b) => s.graph.load_mat(&b),
-            Err(e) => format!("Could not read {}: {e}", path.trim()),
-        };
-        ui.set_graph_out(out.into());
-    }));
+    ui.on_graph_load_mat(with!(|ui, s, _p = SharedString| actions::load_mat(&ui, s)));
 
     // ---- tablet --------------------------------------------------------------------------------
     tablet::wire(&ui, &st);
@@ -646,36 +1105,35 @@ fn main() -> Result<(), slint::PlatformError> {
         let (st2, weak2, timer2) = (st.clone(), weak.clone(), timer.clone());
         ui.on_pen_lifted(move || {
             let (st3, weak3) = (st2.clone(), weak2.clone());
-            let delay = st2.borrow().recog_delay_ms;
+            let delay = st2.borrow().settings.recog_delay_ms;
             timer2.start(slint::TimerMode::SingleShot, std::time::Duration::from_millis(delay), move || {
                 if let Some(ui) = weak3.upgrade() {
-                    run_recognition(&ui, &mut st3.borrow_mut());
-                    refresh(&ui, &st3.borrow());
+                    let s = &mut *st3.borrow_mut();
+                    if s.down_at.is_none() {
+                        run_recognition(&ui, s);
+                        flush(&ui, s);
+                    }
                 }
             });
         });
     }
 
-    // ---- autosave: crash-recovery snapshot soon after a change, full save after 2 s idle --------
+    // ---- autosave + housekeeping: 1 s tick, does nothing while idle and saved ---------------------
     let autosave = Rc::new(slint::Timer::default());
     {
         let (st2, weak2) = (st.clone(), weak.clone());
         autosave.start(slint::TimerMode::Repeated, std::time::Duration::from_secs(1), move || {
-            let mut s = st2.borrow_mut();
-            let now = s.now_ms();
-            if let Some(ws) = &mut s.ws {
-                if let Ok(true) = ws.tick(now) {
-                    if let Some(ui) = weak2.upgrade() {
-                        refresh_sidebar(&ui, &s);
-                    }
-                }
-            }
+            let Some(ui) = weak2.upgrade() else { return };
+            let s = &mut *st2.borrow_mut();
+            actions::housekeeping(&ui, s);
+            flush(&ui, s);
         });
     }
 
-    // Save and stop the tablet server when the window closes.
+    // Save, remember the session, and stop the tablet server when the window closes.
     {
         let st2 = st.clone();
+        let w = weak.clone();
         ui.window().on_close_requested(move || {
             let mut s = st2.borrow_mut();
             s.sync_ws();
@@ -683,13 +1141,45 @@ fn main() -> Result<(), slint::PlatformError> {
             if let Some(ws) = &mut s.ws {
                 let _ = ws.save(now);
             }
+            if let Some(rec) = s.recorder.take() {
+                let _ = rec.finish();
+            }
+            if let Some(ui) = w.upgrade() {
+                s.settings.maximized = ui.window().is_maximized();
+                s.settings.show_doc = ui.get_show_doc();
+                s.settings.show_sidebar = ui.get_show_sidebar();
+            }
+            s.settings.last_notebook = s.ws.as_ref().filter(|w| !w.is_encrypted()).map(|w| w.nb.id.clone());
+            s.settings.last_page = s.ws.as_ref().filter(|w| !w.is_encrypted()).map(|w| w.page.id.clone());
+            s.settings.tabs = if s.ws.as_ref().is_some_and(|w| w.is_encrypted()) { vec![] } else { s.tabs.clone() };
+            s.settings.save();
             s.tablet.stop();
             slint::CloseRequestResponse::HideWindow
         });
     }
 
+    // Files dropped on the window (X11 and Windows; winit has no Wayland drag-and-drop yet).
+    {
+        use slint::winit_030::{winit, WinitWindowAccessor};
+        let (st2, w) = (st.clone(), weak.clone());
+        ui.window().on_winit_window_event(move |_, ev| {
+            if let winit::event::WindowEvent::DroppedFile(path) = ev {
+                if let Some(ui) = w.upgrade() {
+                    let s = &mut *st2.borrow_mut();
+                    actions::open_file(&ui, s, path);
+                    flush(&ui, s);
+                }
+            }
+            slint::winit_030::EventResult::Propagate
+        });
+    }
+
     if let (Some(path), Some(win)) = (shot_path, shot_window) {
         run_scene(&ui, &st, &std::env::var("SCRAWL_SHOT_SCENE").unwrap_or_default());
+        {
+            let s = &mut *st.borrow_mut();
+            flush(&ui, s);
+        }
         return match headless::capture(&win, &ui, &path, shot_size, 800) {
             Ok(()) => {
                 println!("saved {path}");
@@ -712,19 +1202,19 @@ fn run_scene(ui: &MainWindow, st: &Rc<RefCell<State>>, scene: &str) {
         ui.invoke_pointer_up();
     };
     let line = |a: (f32, f32), b: (f32, f32)| -> Vec<(f32, f32)> { (0..=20).map(|i| (a.0 + (b.0 - a.0) * i as f32 / 20.0, a.1 + (b.1 - a.1) * i as f32 / 20.0)).collect() };
-    ui.invoke_canvas_resized(1200.0, 640.0);
+    ui.invoke_canvas_resized(900.0, 600.0);
     for scene in scene.split(',') {
         match scene {
             "draw" => {
-                // "+ =" drawn with real pointer callbacks, then recognized
                 draw(&line((100.0, 300.0), (160.0, 300.0)));
                 draw(&line((130.0, 270.0), (130.0, 330.0)));
                 draw(&line((220.0, 285.0), (290.0, 285.0)));
                 draw(&line((220.0, 315.0), (290.0, 315.0)));
-                ui.invoke_recognize_now();
+                ui.invoke_run_command("recognize".into());
             }
+            "insert" => ui.invoke_run_command("insert".into()),
             "typing" => {
-                ui.invoke_toggle_typing();
+                ui.invoke_run_command("typing".into());
                 for c in "alpha + int".chars() {
                     ui.invoke_type_text(c.to_string().into());
                 }
@@ -733,22 +1223,39 @@ fn run_scene(ui: &MainWindow, st: &Rc<RefCell<State>>, scene: &str) {
                     ui.invoke_type_text(c.to_string().into());
                 }
             }
+            "text" => {
+                ui.set_editor_text("= Chain rule\nIf $f$ and $g$ are differentiable then\n- the derivitive of $f(g(x))$ is $f'(g(x)) g'(x)$\n- see [[Limits]]".into());
+                ui.invoke_editor_commit();
+            }
             "graph" => {
-                ui.invoke_toggle_graph();
+                ui.invoke_run_command("graph".into());
                 ui.invoke_graph_resized(1000.0, 560.0);
-                ui.invoke_graph_text_edited("y = a sin(x)\ny = x^2/4 - 2\nx^2 + y^2 = 9\na = 2".replace("\\n", "\n").into());
+                let t = "y = a sin(x)\ny = x^2/4 - 2\nx^2 + y^2 = 9\na = 2";
+                ui.set_graph_text(t.into());
+                ui.invoke_graph_text_edited(t.into());
             }
             "matlab" => {
-                ui.invoke_toggle_graph();
+                ui.invoke_run_command("graph".into());
                 ui.invoke_graph_resized(1000.0, 560.0);
                 ui.invoke_graph_text_edited("".into());
-                ui.invoke_graph_run_matlab("x = linspace(0, 2*pi, 200);\ny = sin(x) .* exp(-x/4);\nplot(x, y); title('Damped sine')".replace("\\n", "\n").into());
+                ui.invoke_graph_run_matlab("x = linspace(0, 2*pi, 200);\ny = zeros(1, 200);\nfor k = 1:2:7\n  y = y + sin(k*x)/k;\nend\nplot(x, y); title('Square wave (for loop)')".into());
             }
             "tablet" => ui.set_show_tablet(true),
             "notes" => {
                 ui.invoke_new_page("problem set".into());
                 ui.invoke_new_page("cornell notes".into());
             }
+            "palette" => ui.invoke_run_command("palette".into()),
+            "symbols" => ui.invoke_run_command("symbols".into()),
+            "settings" => ui.invoke_run_command("settings".into()),
+            "shortcuts" => ui.invoke_run_command("shortcuts".into()),
+            "focus" => ui.invoke_run_command("focus".into()),
+            "lasso" => {
+                ui.invoke_set_tool("lasso".into());
+                let c: Vec<(f32, f32)> = (0..=40).map(|i| { let a = i as f32 / 40.0 * std::f32::consts::TAU; (190.0 + 140.0 * a.cos(), 300.0 + 70.0 * a.sin()) }).collect();
+                draw(&c);
+            }
+            "nodoc" => ui.invoke_run_command("toggle-doc".into()),
             _ => {}
         }
     }

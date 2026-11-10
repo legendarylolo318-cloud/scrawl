@@ -68,6 +68,32 @@ pub fn backup_if_due(root: &Path, dest: &Path, now: u64, keep: usize) -> Result<
     Ok(made)
 }
 
+/// Restore a backup zip over `root`. The current state is backed up to `safety_dest` first, so a
+/// restore can itself be undone. Entries that would escape `root` are refused (zip-slip).
+pub fn restore_backup(zip_path: &Path, root: &Path, safety_dest: &Path, now: u64) -> Result<PathBuf> {
+    let zerr = |e: zip::result::ZipError| StoreError::Io(std::io::Error::other(e.to_string()));
+    let mut z = zip::ZipArchive::new(std::fs::File::open(zip_path)?).map_err(zerr)?;
+    // validate everything before touching the notes folder
+    for i in 0..z.len() {
+        let e = z.by_index(i).map_err(zerr)?;
+        if e.enclosed_name().is_none() {
+            return Err(StoreError::Io(std::io::Error::other(format!("unsafe path in backup: {:?}", e.name()))));
+        }
+    }
+    let safety = backup_now(root, safety_dest, now)?;
+    for i in 0..z.len() {
+        let mut e = z.by_index(i).map_err(zerr)?;
+        let Some(rel) = e.enclosed_name() else { continue };
+        if e.is_dir() {
+            continue;
+        }
+        let mut data = Vec::new();
+        std::io::Read::read_to_end(&mut e, &mut data)?;
+        atomic_write(&root.join(rel), &data)?;
+    }
+    Ok(safety)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -88,6 +114,29 @@ mod tests {
         assert_eq!(all.len(), 2, "{all:?}");
         let z = zip::ZipArchive::new(std::fs::File::open(&all[1]).unwrap()).unwrap();
         assert!(z.file_names().any(|n| n.as_deref().ok() == Some("nb-1/index.json")));
+        std::fs::remove_dir_all(d).ok();
+    }
+
+    #[test]
+    fn restore_brings_old_state_back_and_keeps_a_safety_copy() {
+        let d = std::env::temp_dir().join(format!("iw-bk-{}", new_id()));
+        let (root, dest) = (d.join("notes"), d.join("backups"));
+        atomic_write(&root.join("nb-1/index.json"), b"old").unwrap();
+        let b = backup_now(&root, &dest, 1_000_000).unwrap();
+        atomic_write(&root.join("nb-1/index.json"), b"new").unwrap();
+        let safety = restore_backup(&b, &root, &dest, 2_000_000).unwrap();
+        assert_eq!(std::fs::read(root.join("nb-1/index.json")).unwrap(), b"old");
+        assert!(safety.exists());
+        // zip-slip entries are refused before anything is written
+        let evil = d.join("evil.zip");
+        {
+            let mut z = zip::ZipWriter::new(std::fs::File::create(&evil).unwrap());
+            z.start_file("../outside.txt", zip::write::SimpleFileOptions::default()).unwrap();
+            z.write_all(b"x").unwrap();
+            z.finish().unwrap();
+        }
+        assert!(restore_backup(&evil, &root, &dest, 3_000_000).is_err());
+        assert!(!d.join("outside.txt").exists());
         std::fs::remove_dir_all(d).ok();
     }
 }

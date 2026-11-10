@@ -109,7 +109,8 @@ impl SearchIndex {
     }
 
     fn from_index(index: Index, f: Fields) -> tantivy::Result<Self> {
-        let writer = index.writer(30_000_000)?;
+        // one indexing thread and the minimum arena keep RAM low (notes are small)
+        let writer = index.writer_with_num_threads(1, 15_000_000)?;
         let reader = index.reader()?;
         Ok(Self { index, writer, reader, f })
     }

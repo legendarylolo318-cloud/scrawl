@@ -1,12 +1,14 @@
 //! Spatial layout of recognized symbols into an expression tree, plus Typst/LaTeX output.
 
 pub mod expr;
+pub mod from_latex;
 pub mod latex;
 pub mod parse;
 pub mod typst;
 pub mod unicode;
 
 pub use expr::*;
+pub use from_latex::{latex_to_typst, looks_like_latex};
 pub use parse::{parse, Glyph};
 
 impl Expr {

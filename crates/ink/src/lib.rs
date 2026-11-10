@@ -4,6 +4,7 @@
 mod doc;
 mod geom;
 mod segment;
+mod shape;
 mod scribble;
 mod smooth;
 
@@ -11,6 +12,7 @@ pub use doc::{Document, EraserMode};
 pub use geom::{bbox, dist_point_segment, path_length, Rect};
 pub use scribble::is_scribble;
 pub use segment::{group_symbols, SegmentConfig};
+pub use shape::{lasso_select, point_in_polygon, snap_shape, Shape};
 pub use smooth::{chaikin, smooth_stroke, OneEuro, SmoothingConfig};
 
 use serde::{Deserialize, Serialize};

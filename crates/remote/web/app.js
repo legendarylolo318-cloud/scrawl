@@ -56,6 +56,7 @@
         lastAcked = Math.max(lastAcked, 0); send({ t: 'resume', seq }); resend(); break;
       case 'ack': lastAcked = Math.max(lastAcked, m.seq); outbox = outbox.filter((x) => x.seq > lastAcked); break;
       case 'candidates': renderStrip(m.labels); break;
+      case 'frame': if (m.png) { $('frame').src = 'data:image/png;base64,' + m.png; $('frame').hidden = false; } else { $('frame').hidden = true; } break;
       case 'state': drawing = m.drawing; $('mode').textContent = drawing ? 'Draw' : 'Math'; $('undo').disabled = !m.can_undo; $('redo').disabled = !m.can_redo; $('expr').textContent = m.expr || ''; break;
       case 'err': setStatus(m.msg); if (/auth|device|pair/i.test(m.msg)) { store.del('device'); store.del('secret'); } break;
       default: break;
