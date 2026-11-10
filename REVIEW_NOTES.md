@@ -4,7 +4,7 @@ Status: phases 1-2 complete; groundwork for phases 4-5 (`layout`, `input` crates
 Not started: phases 3 (UI half), 6-12. Crates `render store search media export remote` are stubs.
 
 ## Recognition accuracy (HASYv2)
-Measured by `inkwell-train` after 30 epochs (see `crates/recog/model/metrics.json`):
+Measured by `scrawl-train` after 30 epochs (see `crates/recog/model/metrics.json`):
 
 | Test set | n | top-1 | top-5 |
 |---|---|---|---|
@@ -30,7 +30,7 @@ Latency: 0.94 ms/symbol on CPU (budget 30 ms). Model: 2.85 MB (budget 5 MB).
 - [x] CNN trained in **Rust (burn, wgpu: AMD/NVIDIA/Intel iGPU or CPU)**, exported to ONNX, run with tract
 - [x] HASYv2 (ODbL, attributed in training/README.md) + font-synthesized data with tremor augmentation
 - [ ] HASYv2 license/attribution in top-level README (README not written yet)
-- [x] $P+ personal recognizer fused with CNN (>=3 samples = priority), corrections auto-saved to `~/.config/inkwell/personal.json` (atomic write), "Train" mode, candidate strip with 1-5 keys + click (tested headlessly in `app::session`)
+- [x] $P+ personal recognizer fused with CNN (>=3 samples = priority), corrections auto-saved to `~/.config/scrawl/personal.json` (atomic write), "Train" mode, candidate strip with 1-5 keys + click (tested headlessly in `app::session`)
 - [ ] candidate strip shows unicode glyphs in a Slint `Text`, not Typst-rendered (needs phase 6 renderer)
 - [ ] function-name recognition from drawn letter sequences: done in `layout::parse` (sin, cos, ...), not wired to UI
 ### 3. Layout / expression tree

@@ -6645,44 +6645,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "inkwell"
-version = "0.1.0"
-dependencies = [
- "export",
- "ink",
- "input 0.1.0",
- "layout",
- "media",
- "recog",
- "remote",
- "render",
- "search",
- "slint",
- "slint-build",
- "store",
- "tiny-skia 0.11.4",
-]
-
-[[package]]
-name = "inkwell-train"
-version = "0.1.0"
-dependencies = [
- "ab_glyph",
- "anyhow",
- "burn",
- "bzip2 0.6.1",
- "image",
- "md-5 0.11.0",
- "prost",
- "rand 0.10.3",
- "rayon",
- "serde_json",
- "tar",
- "tract-onnx",
- "ureq 3.5.1",
-]
-
-[[package]]
 name = "inout"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10738,6 +10700,44 @@ name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
+
+[[package]]
+name = "scrawl"
+version = "0.1.0"
+dependencies = [
+ "export",
+ "ink",
+ "input 0.1.0",
+ "layout",
+ "media",
+ "recog",
+ "remote",
+ "render",
+ "search",
+ "slint",
+ "slint-build",
+ "store",
+ "tiny-skia 0.11.4",
+]
+
+[[package]]
+name = "scrawl-train"
+version = "0.1.0"
+dependencies = [
+ "ab_glyph",
+ "anyhow",
+ "burn",
+ "bzip2 0.6.1",
+ "image",
+ "md-5 0.11.0",
+ "prost",
+ "rand 0.10.3",
+ "rayon",
+ "serde_json",
+ "tar",
+ "tract-onnx",
+ "ureq 3.5.1",
+]
 
 [[package]]
 name = "scrypt"

@@ -106,7 +106,7 @@ pub fn to_onnx(net: &Net, classes: usize) -> Vec<u8> {
         }
     }
     let graph = GraphProto {
-        name: "inkwell_symbols".into(),
+        name: "scrawl_symbols".into(),
         node: nodes,
         initializer: inits,
         input: vec![value_info("x", &[1, 1, 32, 32])],
@@ -116,7 +116,7 @@ pub fn to_onnx(net: &Net, classes: usize) -> Vec<u8> {
     ModelProto {
         ir_version: 8,
         opset_import: vec![OperatorSetIdProto { domain: String::new(), version: 13 }],
-        producer_name: "inkwell-train".into(),
+        producer_name: "scrawl-train".into(),
         graph: Some(graph),
         ..Default::default()
     }

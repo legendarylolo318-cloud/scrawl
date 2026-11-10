@@ -1,7 +1,7 @@
-# Inkwell
+# Scrawl
 
 Handwritten-math notes in pure Rust + [Slint](https://slint.dev). Draw with a mouse, trackpad, pen
-tablet, or an iPad/Android device; Inkwell recognizes each symbol and typesets it. Typing is fully
+tablet, or an iPad/Android device; Scrawl recognizes each symbol and typesets it. Typing is fully
 supported and mixes freely with drawing. Linux and Windows. No Chromium, no webview.
 
 > **Status: work in progress.** The core crates are implemented and tested, but the desktop UI does
@@ -27,9 +27,9 @@ Verify with `SHA256SUMS`. Nothing else to install; no GPU needed.
 ## Build
 
 ```bash
-cargo build --release -p inkwell
-./target/release/inkwell              # run
-./target/release/inkwell --self-test  # headless smoke test (exit 0 = OK)
+cargo build --release -p scrawl
+./target/release/scrawl              # run
+./target/release/scrawl --self-test  # headless smoke test (exit 0 = OK)
 ```
 
 Linux build dependencies (Arch): `pacman -S alsa-lib fontconfig libxkbcommon wayland dbus pkgconf`.
@@ -41,8 +41,8 @@ Training is also pure Rust (`burn`) and runs on any GPU through Vulkan/DX12 (AMD
 integrated) or on the CPU:
 
 ```bash
-cargo run --release -p inkwell-train -- download
-cargo run --release -p inkwell-train -- train --epochs 30
+cargo run --release -p scrawl-train -- download
+cargo run --release -p scrawl-train -- train --epochs 30
 cp training/out/symbols.onnx training/out/labels.json crates/recog/model/
 ```
 

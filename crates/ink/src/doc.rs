@@ -30,6 +30,12 @@ impl Document {
         Self::default()
     }
 
+    /// Document pre-loaded with saved strokes (history starts empty).
+    pub fn with_strokes(strokes: Vec<Stroke>) -> Self {
+        let next_id = strokes.iter().map(|s| s.id).max().unwrap_or(0);
+        Self { strokes, undo: vec![], redo: vec![], next_id }
+    }
+
     pub fn alloc_id(&mut self) -> u64 {
         self.next_id += 1;
         self.next_id

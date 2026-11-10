@@ -175,7 +175,7 @@ pub fn start(cfg: ServerConfig, keys: Arc<dyn KeyStore + Send + Sync>) -> Result
 
     let (events_tx, events_rx) = mpsc::channel();
     let (out_tx, _) = broadcast::channel(256);
-    let hosts: Vec<String> = ips.iter().map(|i| format!("{i}:{}", cfg.port)).chain([format!("inkwell.local:{}", cfg.port)]).collect();
+    let hosts: Vec<String> = ips.iter().map(|i| format!("{i}:{}", cfg.port)).chain([format!("scrawl.local:{}", cfg.port)]).collect();
     let shared = Arc::new(Shared {
         pairing: Mutex::new(Pairing::with_devices(load_devices(&cfg.config_dir))),
         cfg: cfg.clone(),
@@ -194,7 +194,7 @@ pub fn start(cfg: ServerConfig, keys: Arc<dyn KeyStore + Send + Sync>) -> Result
     let (ready_tx, ready_rx) = mpsc::channel::<Result<Vec<SocketAddr>, String>>();
     let sh = shared.clone();
     let thread = std::thread::Builder::new()
-        .name("inkwell-tablet-server".into())
+        .name("scrawl-tablet-server".into())
         .spawn(move || {
             let rt = match tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build() {
                 Ok(r) => r,
@@ -422,7 +422,7 @@ async fn serve_bootstrap(sh: Arc<Shared>, listener: TcpListener, done: Arc<Notif
         let (status, ctype, body, final_download) = match (path.as_str(), ca) {
             ("/ca.crt", Some((der, _))) => ("200 OK", "application/x-x509-ca-cert", der, true),
             ("/ca.mobileconfig", Some((der, _))) => ("200 OK", "application/x-apple-aspen-config", ca::mobileconfig(&der, &crate::pairing::random_hex(8), &crate::pairing::random_hex(8)).into_bytes(), true),
-            ("/", _) => ("200 OK", "text/html; charset=utf-8", b"<!doctype html><meta name=viewport content='width=device-width'><h1>Inkwell</h1><p><a href='/ca.mobileconfig'>iPhone / iPad profile</a></p><p><a href='/ca.crt'>Android certificate (.crt)</a></p>".to_vec(), false),
+            ("/", _) => ("200 OK", "text/html; charset=utf-8", b"<!doctype html><meta name=viewport content='width=device-width'><h1>Scrawl</h1><p><a href='/ca.mobileconfig'>iPhone / iPad profile</a></p><p><a href='/ca.crt'>Android certificate (.crt)</a></p>".to_vec(), false),
             _ => ("404 Not Found", "text/plain", b"not found".to_vec(), false),
         };
         let head = format!("HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nContent-Disposition: inline\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n", body.len());
@@ -506,7 +506,7 @@ impl RemoteHandle {
         let mut stop = self.stop_tx.subscribe();
         // run on its own short-lived thread + runtime, owned by the server lifetime
         std::thread::Builder::new()
-            .name("inkwell-ca-bootstrap".into())
+            .name("scrawl-ca-bootstrap".into())
             .spawn(move || {
                 let Ok(rt) = tokio::runtime::Builder::new_current_thread().enable_all().build() else { return };
                 rt.block_on(async {

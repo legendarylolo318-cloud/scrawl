@@ -1,6 +1,6 @@
 # Security
 
-Inkwell is local-first. The only network feature is the optional **tablet server**, which lets a
+Scrawl is local-first. The only network feature is the optional **tablet server**, which lets a
 phone or tablet act as a drawing tablet. It is **off by default**; when off there are no threads and
 no sockets. This document describes the threat model, the design, and how to reset everything.
 
@@ -69,9 +69,9 @@ Compare the fingerprint shown on the PC with the device's certificate details.
 ## Resetting
 
 - **All pairing:** in the app, Tablet > Paired devices > Revoke all (or delete `devices.json` in the
-  config folder, `~/.config/inkwell/` on Linux, `%APPDATA%\inkwell\` on Windows).
+  config folder, `~/.config/scrawl/` on Linux, `%APPDATA%\scrawl\` on Windows).
 - **The CA:** stop the server, delete `ca.pem` from that folder, and remove the keyring entry
-  "inkwell-tablet-server / root-ca-key" (Seahorse/`secret-tool` on Linux, Credential Manager on Windows).
+  "scrawl-tablet-server / root-ca-key" (Seahorse/`secret-tool` on Linux, Credential Manager on Windows).
   A new CA is created next time; remove the old profile/certificate from your devices.
 
 ## Reporting

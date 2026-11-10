@@ -1,6 +1,7 @@
 mod raster;
 mod selftest;
 mod session;
+mod workspace;
 
 use ink::{is_scribble, smooth_stroke, Document, EraserMode, InkMode, PenKind, Point, SmoothingConfig, Stroke};
 use raster::{Paper, View};

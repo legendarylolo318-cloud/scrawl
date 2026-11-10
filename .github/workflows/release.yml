@@ -20,21 +20,21 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libasound2-dev libfontconfig1-dev libxkbcommon-dev libwayland-dev libxcb1-dev libxkbcommon-x11-dev libdbus-1-dev pkg-config file desktop-file-utils
       - name: Build
-        run: cargo build --release --locked -p inkwell
+        run: cargo build --release --locked -p scrawl
       - name: Self-test the binary
-        run: ./target/release/inkwell --self-test
+        run: ./target/release/scrawl --self-test
       - name: Package AppImage (linuxdeploy)
         run: |
           curl -fsSL -o linuxdeploy https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20250213-2/linuxdeploy-x86_64.AppImage
           chmod +x linuxdeploy
           mkdir -p AppDir
           VERSION="${VERSION#v}" ./linuxdeploy --appimage-extract-and-run --appdir AppDir \
-            --executable target/release/inkwell \
-            --desktop-file packaging/inkwell.desktop \
-            --icon-file packaging/inkwell.png --icon-filename inkwell \
+            --executable target/release/scrawl \
+            --desktop-file packaging/scrawl.desktop \
+            --icon-file packaging/scrawl.png --icon-filename scrawl \
             --output appimage
           mkdir -p dist
-          mv Inkwell-*.AppImage "dist/Inkwell-${VERSION}-x86_64.AppImage"
+          mv Scrawl-*.AppImage "dist/Scrawl-${VERSION}-x86_64.AppImage"
       - name: Self-test the AppImage
         run: |
           chmod +x dist/*.AppImage
@@ -50,34 +50,34 @@ jobs:
         with: { targets: x86_64-pc-windows-msvc }
       - uses: Swatinem/rust-cache@v2
       - name: Build
-        run: cargo build --release --locked -p inkwell --target x86_64-pc-windows-msvc
+        run: cargo build --release --locked -p scrawl --target x86_64-pc-windows-msvc
       - name: Collect
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item target/x86_64-pc-windows-msvc/release/inkwell.exe dist/inkwell.exe
+          Copy-Item target/x86_64-pc-windows-msvc/release/scrawl.exe dist/scrawl.exe
       - name: Self-test the exe
         shell: pwsh
         run: |
-          ./dist/inkwell.exe --self-test
+          ./dist/scrawl.exe --self-test
           if ($LASTEXITCODE -ne 0) { throw "self-test failed" }
       - name: Portable zip
         shell: pwsh
         run: |
           $v = "${{ github.ref_name }}".TrimStart("v")
-          Compress-Archive -Path dist/inkwell.exe, LICENSE, README.md -DestinationPath "dist/Inkwell-$v-windows-x86_64-portable.zip"
+          Compress-Archive -Path dist/scrawl.exe, LICENSE, README.md -DestinationPath "dist/Scrawl-$v-windows-x86_64-portable.zip"
       - name: Installer (Inno Setup)
         shell: pwsh
         run: |
           choco install innosetup -y --no-progress
-          $env:INKWELL_VERSION = "${{ github.ref_name }}".TrimStart("v")
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" packaging\inkwell.iss
+          $env:SCRAWL_VERSION = "${{ github.ref_name }}".TrimStart("v")
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" packaging\scrawl.iss
       - name: Self-test the installed app
         shell: pwsh
         run: |
           $setup = Get-ChildItem dist/*-setup.exe | Select-Object -First 1
           Start-Process $setup.FullName -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/DIR=$PWD\installed" -Wait
-          & "$PWD\installed\inkwell.exe" --self-test
+          & "$PWD\installed\scrawl.exe" --self-test
           if ($LASTEXITCODE -ne 0) { throw "installed self-test failed" }
       - uses: actions/upload-artifact@v4
         with:
@@ -103,5 +103,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${{ github.ref_name }}" artifacts/* \
-            --draft --title "Inkwell ${{ github.ref_name }}" \
+            --draft --title "Scrawl ${{ github.ref_name }}" \
             --notes "Draft. See CHANGELOG.md. Verify with SHA256SUMS."

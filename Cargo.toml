@@ -6,7 +6,7 @@ members = ["crates/*"]
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/legendarylolo318-cloud/inkwell"
+repository = "https://github.com/legendarylolo318-cloud/scrawl"
 
 [workspace.dependencies]
 ink = { path = "crates/ink" }

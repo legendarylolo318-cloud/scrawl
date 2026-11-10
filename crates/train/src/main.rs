@@ -1,9 +1,9 @@
-//! Offline trainer for the Inkwell symbol CNN. Pure Rust (burn). Runs on any GPU through
+//! Offline trainer for the Scrawl symbol CNN. Pure Rust (burn). Runs on any GPU through
 //! wgpu (Vulkan/DX12/Metal: AMD, NVIDIA, Intel incl. integrated) or on the CPU, and writes
 //! an ONNX file that the app runs with tract.
 //!
-//!   inkwell-train download
-//!   inkwell-train train [--device auto|gpu|cpu] [--epochs N] [--out DIR]
+//!   scrawl-train download
+//!   scrawl-train train [--device auto|gpu|cpu] [--epochs N] [--out DIR]
 
 mod data;
 mod export;
@@ -27,7 +27,7 @@ const HASY_URL: &str = "https://zenodo.org/records/259444/files/HASYv2.tar.bz2?d
 const HASY_MD5: &str = "fddf23f36e24b5236f6b3a0880c778e3";
 
 fn data_dir() -> PathBuf {
-    PathBuf::from(std::env::var("INKWELL_DATA").unwrap_or_else(|_| "training/data".into()))
+    PathBuf::from(std::env::var("SCRAWL_DATA").unwrap_or_else(|_| "training/data".into()))
 }
 
 fn download() -> Result<()> {
@@ -210,6 +210,6 @@ fn main() -> Result<()> {
                 }
             }
         }
-        _ => bail!("usage: inkwell-train download | train [--device auto|gpu|cpu] [--epochs N] [--out DIR]"),
+        _ => bail!("usage: scrawl-train download | train [--device auto|gpu|cpu] [--epochs N] [--out DIR]"),
     }
 }

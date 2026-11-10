@@ -26,7 +26,7 @@ pub fn config_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("APPDATA").map(PathBuf::from))
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(base.join("inkwell"))
+    Some(base.join("scrawl"))
 }
 
 impl Session {
@@ -170,7 +170,7 @@ mod tests {
 
     #[test]
     fn corrections_become_personal_samples_and_persist() {
-        let dir = std::env::temp_dir().join(format!("inkwell-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("scrawl-test-{}", std::process::id()));
         let path = dir.join("personal.json");
         let strokes = plus();
         {

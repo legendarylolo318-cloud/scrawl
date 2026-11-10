@@ -40,7 +40,7 @@ pub fn ct_eq(a: &[u8], b: &[u8]) -> bool {
 
 /// 6-digit confirmation code both sides can compute from the token and the client's nonce.
 pub fn confirmation_code(token_hex: &str, client_nonce: &str) -> String {
-    let h = Sha256::digest(format!("inkwell-pair|{token_hex}|{client_nonce}").as_bytes());
+    let h = Sha256::digest(format!("scrawl-pair|{token_hex}|{client_nonce}").as_bytes());
     let n = u32::from_be_bytes([h[0], h[1], h[2], h[3]]) % 1_000_000;
     format!("{n:06}")
 }

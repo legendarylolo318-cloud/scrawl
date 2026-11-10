@@ -1,6 +1,6 @@
-# Training the Inkwell symbol recognizer (pure Rust)
+# Training the Scrawl symbol recognizer (pure Rust)
 
-The trainer is the `inkwell-train` crate (`crates/train`), written with
+The trainer is the `scrawl-train` crate (`crates/train`), written with
 [burn](https://burn.dev). No Python anywhere. It trains a ~0.7 M-parameter CNN
 (32x32 input, 191 classes) and writes an ONNX file that the app runs with
 `tract-onnx` on the CPU. **End users need no GPU, driver or runtime.**
@@ -17,8 +17,8 @@ On Arch you only need a Vulkan driver (`vulkan-radeon`, `nvidia-utils`, or
 ## Run
 
 ```bash
-cargo run --release -p inkwell-train -- download            # fetch + md5-verify HASYv2 into training/data
-cargo run --release -p inkwell-train -- train --epochs 30   # writes training/out/{symbols.onnx,labels.json,metrics.json}
+cargo run --release -p scrawl-train -- download            # fetch + md5-verify HASYv2 into training/data
+cargo run --release -p scrawl-train -- train --epochs 30   # writes training/out/{symbols.onnx,labels.json,metrics.json}
 cp training/out/symbols.onnx training/out/labels.json crates/recog/model/
 ```
 

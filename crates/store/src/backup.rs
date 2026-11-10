@@ -20,7 +20,7 @@ fn collect(dir: &Path, base: &Path, skip: &Path, out: &mut Vec<PathBuf>) {
 
 pub fn backup_name(now: u64) -> String {
     let secs = now / 1000;
-    format!("inkwell-backup-{}-{:02}{:02}{:02}.zip", iso_date(now).replace('-', ""), secs / 3600 % 24, secs / 60 % 60, secs % 60)
+    format!("scrawl-backup-{}-{:02}{:02}{:02}.zip", iso_date(now).replace('-', ""), secs / 3600 % 24, secs / 60 % 60, secs % 60)
 }
 
 /// Zip the whole notes folder into `dest`. Backups inside the notes folder are excluded.
@@ -50,7 +50,7 @@ pub fn list_backups(dest: &Path) -> Vec<PathBuf> {
         .flatten()
         .flatten()
         .map(|e| e.path())
-        .filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("inkwell-backup-") && n.to_string_lossy().ends_with(".zip")))
+        .filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("scrawl-backup-") && n.to_string_lossy().ends_with(".zip")))
         .collect();
     v.sort();
     v
@@ -58,7 +58,7 @@ pub fn list_backups(dest: &Path) -> Vec<PathBuf> {
 
 /// Make today's backup if there is none yet; prune to the newest `keep`. Returns the new file.
 pub fn backup_if_due(root: &Path, dest: &Path, now: u64, keep: usize) -> Result<Option<PathBuf>> {
-    let today = format!("inkwell-backup-{}", iso_date(now).replace('-', ""));
+    let today = format!("scrawl-backup-{}", iso_date(now).replace('-', ""));
     let have_today = list_backups(dest).iter().any(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with(&today)));
     let made = if have_today { None } else { Some(backup_now(root, dest, now)?) };
     let all = list_backups(dest);

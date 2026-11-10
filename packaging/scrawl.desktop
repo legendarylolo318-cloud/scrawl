@@ -1,8 +1,8 @@
 [Desktop Entry]
 Type=Application
-Name=Inkwell
+Name=Scrawl
 Comment=Handwritten math notes
-Exec=inkwell
-Icon=inkwell
+Exec=scrawl
+Icon=scrawl
 Categories=Education;Office;Science;
 Terminal=false

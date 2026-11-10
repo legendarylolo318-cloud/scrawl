@@ -1,4 +1,4 @@
-//! `inkwell --self-test`: headless smoke test used by CI on every release artifact.
+//! `scrawl --self-test`: headless smoke test used by CI on every release artifact.
 //! Loads the model, recognizes bundled sample ink, renders a page, round-trips storage, search,
 //! export, encryption and the tablet CA, then exits 0 (all good) or 1.
 
@@ -52,7 +52,7 @@ pub fn run() -> i32 {
     }
 
     // 3. storage + encryption + history + export + search
-    let dir = std::env::temp_dir().join(format!("inkwell-selftest-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("scrawl-selftest-{}", std::process::id()));
     let result = (|| -> Result<(), String> {
         let s = store::Store::open(&dir).map_err(|e| e.to_string())?;
         for vault in [store::Vault::none(), store::Vault::with_password("selftest")] {

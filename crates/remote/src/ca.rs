@@ -31,7 +31,7 @@ pub struct KeyringStore;
 
 impl KeyringStore {
     fn entry() -> Result<keyring::Entry, String> {
-        keyring::Entry::new("inkwell-tablet-server", "root-ca-key").map_err(|e| e.to_string())
+        keyring::Entry::new("scrawl-tablet-server", "root-ca-key").map_err(|e| e.to_string())
     }
 }
 
@@ -99,8 +99,8 @@ fn ymd(now_ms: u64, plus_days: i64) -> time::OffsetDateTime {
 fn ca_params(now_ms: u64) -> Result<CertificateParams, String> {
     let mut p = CertificateParams::new(Vec::<String>::new()).map_err(|e| e.to_string())?;
     let mut dn = DistinguishedName::new();
-    dn.push(DnType::CommonName, "Inkwell local tablet CA");
-    dn.push(DnType::OrganizationName, "Inkwell");
+    dn.push(DnType::CommonName, "Scrawl local tablet CA");
+    dn.push(DnType::OrganizationName, "Scrawl");
     p.distinguished_name = dn;
     p.is_ca = IsCa::Ca(BasicConstraints::Constrained(0));
     p.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
@@ -161,7 +161,7 @@ pub struct Leaf {
     pub ips: Vec<IpAddr>,
 }
 
-/// Issue a 30-day server certificate for the given private IPs (and `inkwell.local`).
+/// Issue a 30-day server certificate for the given private IPs (and `scrawl.local`).
 pub fn issue_leaf(keys: &dyn KeyStore, ca_cert_pem: &str, ips: &[IpAddr], now_ms: u64) -> Result<Leaf, String> {
     let ips: Vec<IpAddr> = ips.iter().copied().filter(|i| is_private_ip(*i)).collect();
     if ips.is_empty() {
@@ -171,10 +171,10 @@ pub fn issue_leaf(keys: &dyn KeyStore, ca_cert_pem: &str, ips: &[IpAddr], now_ms
     let issuer = Issuer::from_ca_cert_pem(ca_cert_pem, ca_key).map_err(|e| e.to_string())?;
     let mut p = CertificateParams::new(Vec::<String>::new()).map_err(|e| e.to_string())?;
     let mut dn = DistinguishedName::new();
-    dn.push(DnType::CommonName, "Inkwell tablet server");
+    dn.push(DnType::CommonName, "Scrawl tablet server");
     p.distinguished_name = dn;
     p.subject_alt_names = ips.iter().map(|i| SanType::IpAddress(*i)).collect();
-    p.subject_alt_names.push(SanType::DnsName("inkwell.local".try_into().map_err(|e: rcgen::Error| e.to_string())?));
+    p.subject_alt_names.push(SanType::DnsName("scrawl.local".try_into().map_err(|e: rcgen::Error| e.to_string())?));
     p.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
     p.key_usages = vec![KeyUsagePurpose::DigitalSignature];
     p.not_before = ymd(now_ms, -1);
@@ -209,20 +209,20 @@ pub fn mobileconfig(ca_der: &[u8], uuid_a: &str, uuid_b: &str) -> String {
   <key>PayloadContent</key>
   <array>
     <dict>
-      <key>PayloadCertificateFileName</key><string>inkwell-ca.cer</string>
+      <key>PayloadCertificateFileName</key><string>scrawl-ca.cer</string>
       <key>PayloadContent</key><data>
 {}
       </data>
-      <key>PayloadDescription</key><string>Lets this device trust the Inkwell tablet server on your home network. Limited to private IP addresses and .local names.</string>
-      <key>PayloadDisplayName</key><string>Inkwell local tablet CA</string>
-      <key>PayloadIdentifier</key><string>app.inkwell.ca.{uuid_b}</string>
+      <key>PayloadDescription</key><string>Lets this device trust the Scrawl tablet server on your home network. Limited to private IP addresses and .local names.</string>
+      <key>PayloadDisplayName</key><string>Scrawl local tablet CA</string>
+      <key>PayloadIdentifier</key><string>app.scrawl.ca.{uuid_b}</string>
       <key>PayloadType</key><string>com.apple.security.root</string>
       <key>PayloadUUID</key><string>{uuid_b}</string>
       <key>PayloadVersion</key><integer>1</integer>
     </dict>
   </array>
-  <key>PayloadDisplayName</key><string>Inkwell tablet connection</string>
-  <key>PayloadIdentifier</key><string>app.inkwell.profile.{uuid_a}</string>
+  <key>PayloadDisplayName</key><string>Scrawl tablet connection</string>
+  <key>PayloadIdentifier</key><string>app.scrawl.profile.{uuid_a}</string>
   <key>PayloadRemovalDisallowed</key><false/>
   <key>PayloadType</key><string>Configuration</string>
   <key>PayloadUUID</key><string>{uuid_a}</string>

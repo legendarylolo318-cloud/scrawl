@@ -1,5 +1,5 @@
 [package]
-name = "inkwell-train"
+name = "scrawl-train"
 edition.workspace = true
 version.workspace = true
 license.workspace = true

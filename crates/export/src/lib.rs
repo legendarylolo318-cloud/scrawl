@@ -167,7 +167,7 @@ fn esc_html(s: &str) -> String {
 
 /// Self-contained HTML: math is embedded as SVG so it renders offline with no scripts.
 pub fn to_html(pages: &[&Page]) -> Result<String, String> {
-    let mut s = String::from("<!doctype html><html><head><meta charset=\"utf-8\"><title>Inkwell export</title><style>body{font-family:sans-serif;max-width:48em;margin:2em auto;padding:0 1em}.callout{background:#eef;padding:.6em;border-radius:6px}</style></head><body>\n");
+    let mut s = String::from("<!doctype html><html><head><meta charset=\"utf-8\"><title>Scrawl export</title><style>body{font-family:sans-serif;max-width:48em;margin:2em auto;padding:0 1em}.callout{background:#eef;padding:.6em;border-radius:6px}</style></head><body>\n");
     for p in pages {
         s += &format!("<h1>{}</h1>\n", esc_html(&p.title));
         for b in &p.blocks {
@@ -265,7 +265,7 @@ pub fn copy_block(expr: &Expr, how: CopyAs) -> Result<Vec<u8>, String> {
 
 /// Open the exported PDF in the OS viewer, which provides the native print dialog.
 pub fn print_pdf(pdf: &[u8]) -> std::io::Result<()> {
-    let path = std::env::temp_dir().join(format!("inkwell-print-{}.pdf", store::new_id()));
+    let path = std::env::temp_dir().join(format!("scrawl-print-{}.pdf", store::new_id()));
     std::fs::write(&path, pdf)?;
     #[cfg(target_os = "windows")]
     let status = std::process::Command::new("cmd").args(["/C", "start", "", &path.to_string_lossy()]).status()?;

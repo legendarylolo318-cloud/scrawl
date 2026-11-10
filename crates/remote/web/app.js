@@ -1,4 +1,4 @@
-// Inkwell tablet client: vanilla JS, no dependencies, no third-party requests.
+// Scrawl tablet client: vanilla JS, no dependencies, no third-party requests.
 'use strict';
 (() => {
   const $ = (id) => document.getElementById(id);
@@ -13,7 +13,7 @@
     return [...new Uint8Array(b)].map((x) => x.toString(16).padStart(2, '0')).join('');
   }
   async function confirmationCode(token, nonce) {
-    const h = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode('inkwell-pair|' + token + '|' + nonce)));
+    const h = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode('scrawl-pair|' + token + '|' + nonce)));
     const n = ((h[0] << 24 | h[1] << 16 | h[2] << 8 | h[3]) >>> 0) % 1000000;
     return String(n).padStart(6, '0');
   }
