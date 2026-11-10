@@ -1,0 +1,138 @@
+import { Slider } from "std-widgets.slint";
+
+// Tokyo Night palette
+export global Theme {
+    out property <color> bg: #1a1b26;
+    out property <color> surface: #24283b;
+    out property <color> accent: #7aa2f7;
+    out property <color> text: #c0caf5;
+    out property <color> urgent: #f7768e;
+}
+
+component ToolButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> active: false;
+    in property <bool> enabled: true;
+    callback clicked();
+    min-width: 40px;
+    min-height: 40px;
+    border-radius: 6px;
+    background: !enabled ? transparent : active ? Theme.accent : ta.has-hover ? #2f354d : Theme.surface;
+    Text {
+        text: label;
+        color: !enabled ? #565f89 : active ? Theme.bg : Theme.text;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    ta := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component MainWindow inherits Window {
+    title: "Inkwell";
+    min-width: 640px;
+    min-height: 420px;
+    preferred-width: 1100px;
+    preferred-height: 720px;
+    background: Theme.bg;
+
+    in property <image> frame;
+    in property <string> tool: "pen";        // pen | highlighter | eraser
+    in property <string> mode: "math";       // math | drawing
+    in property <bool> pixel-erase: false;
+    in property <bool> can-undo: false;
+    in property <bool> can-redo: false;
+    in property <float> smoothing: 0.5;
+    in property <float> stroke-width: 3.0;
+    in property <string> status: "";
+    in-out property <float> ui-scale: 1.0;
+
+    callback canvas-resized(length, length);
+    callback pointer-down(length, length);
+    callback pointer-move(length, length);
+    callback pointer-up();
+    callback zoom(float, length, length);
+    callback pan(length, length);
+    callback set-tool(string);
+    callback set-mode(string);
+    callback toggle-pixel-erase();
+    callback undo();
+    callback redo();
+    callback clear-all();
+    callback set-smoothing(float);
+    callback set-width(float);
+    callback set-color(int);
+    callback recognize-now();
+
+    VerticalLayout {
+        Rectangle {
+            background: Theme.surface;
+            height: 56px;
+            HorizontalLayout {
+                padding: 8px;
+                spacing: 6px;
+                ToolButton { label: "Pen"; active: root.tool == "pen"; clicked => { root.set-tool("pen"); } }
+                ToolButton { label: "Highlight"; active: root.tool == "highlighter"; clicked => { root.set-tool("highlighter"); } }
+                ToolButton { label: "Eraser"; active: root.tool == "eraser"; clicked => { root.set-tool("eraser"); } }
+                ToolButton { label: root.pixel-erase ? "Pixel" : "Stroke"; clicked => { root.toggle-pixel-erase(); } }
+                Rectangle { width: 12px; }
+                ToolButton { label: "Math/Text"; active: root.mode == "math"; clicked => { root.set-mode("math"); } }
+                ToolButton { label: "Drawing"; active: root.mode == "drawing"; clicked => { root.set-mode("drawing"); } }
+                Rectangle { width: 12px; }
+                ToolButton { label: "Undo"; enabled: root.can-undo; clicked => { root.undo(); } }
+                ToolButton { label: "Redo"; enabled: root.can-redo; clicked => { root.redo(); } }
+                ToolButton { label: "Clear"; clicked => { root.clear-all(); } }
+                ToolButton { label: "Recognize"; clicked => { root.recognize-now(); } }
+                for c[i] in [#c0caf5, #f7768e, #9ece6a, #7aa2f7, #e0af68, #bb9af7] : Rectangle {
+                    width: 40px; height: 40px; border-radius: 20px; background: c;
+                    TouchArea { clicked => { root.set-color(i); } }
+                }
+            }
+        }
+        Rectangle {
+            background: Theme.surface;
+            height: 44px;
+            HorizontalLayout {
+                padding-left: 12px; padding-right: 12px; spacing: 10px;
+                Text { text: "Smoothing " + Math.round(root.smoothing * 100) + "%"; color: Theme.text; vertical-alignment: center; }
+                Slider {
+                    width: 160px; minimum: 0; maximum: 1; value: root.smoothing;
+                    changed(v) => { root.set-smoothing(v); }
+                }
+                Text { text: "Width " + Math.round(root.stroke-width * 10) / 10; color: Theme.text; vertical-alignment: center; }
+                Slider {
+                    width: 160px; minimum: 0.5; maximum: 24; value: root.stroke-width;
+                    changed(v) => { root.set-width(v); }
+                }
+                Text { text: root.status; color: Theme.accent; vertical-alignment: center; }
+            }
+        }
+        canvas := Rectangle {
+            background: Theme.bg;
+            clip: true;
+            changed width => { root.canvas-resized(self.width, self.height); }
+            changed height => { root.canvas-resized(self.width, self.height); }
+            Image { source: root.frame; width: parent.width; height: parent.height; image-fit: fill; }
+            ta := TouchArea {
+                pointer-event(e) => {
+                    if e.kind == PointerEventKind.down {
+                        if e.button == PointerEventButton.left { root.pointer-down(self.mouse-x, self.mouse-y); }
+                    } else if e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel {
+                        root.pointer-up();
+                    }
+                }
+                moved => { root.pointer-move(self.mouse-x, self.mouse-y); }
+                scroll-event(e) => {
+                    if e.modifiers.control {
+                        root.zoom(e.delta-y > 0 ? 1.1 : 1 / 1.1, self.mouse-x, self.mouse-y);
+                    } else {
+                        root.pan(e.delta-x, e.delta-y);
+                    }
+                    accept
+                }
+            }
+        }
+    }
+}
