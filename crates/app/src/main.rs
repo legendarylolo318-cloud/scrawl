@@ -373,7 +373,11 @@ fn refresh_canvas(ui: &MainWindow, st: &mut State) {
     };
     let light = st.light();
     let ov = Overlay { lasso: &st.lasso, selection: sel, light };
-    let img = st.canvas.frame(&st.doc.strokes, live.as_ref(), st.view, ((w as f32 * scale) as u32, (h as f32 * scale) as u32), scale, bg, st.paper, page, st.background.as_ref(), &ov);
+    let mut paper = st.paper;
+    if light && paper.color[..3] == [0x41, 0x48, 0x68] {
+        paper.color = [0xc4, 0xc9, 0xd9, 0xff];
+    }
+    let img = st.canvas.frame(&st.doc.strokes, live.as_ref(), st.view, ((w as f32 * scale) as u32, (h as f32 * scale) as u32), scale, bg, paper, page, st.background.as_ref(), &ov);
     ui.set_frame(img);
     ui.set_can_undo(st.doc.can_undo());
     ui.set_can_redo(st.doc.can_redo());
@@ -707,6 +711,13 @@ fn main() -> Result<(), slint::PlatformError> {
 
     ui.on_window_resized(with!(|_ui, s, w = f32, h = f32| {
         s.settings.window = Some((w as u32, h as u32));
+    }));
+    ui.on_doc_resized(with!(|_ui, s, w = f32| {
+        let w = w.max(120.0);
+        if (w - s.doc_width).abs() > 4.0 {
+            s.doc_width = w;
+            s.dirty |= dirty::DOC;
+        }
     }));
     ui.on_canvas_resized(with!(|_ui, s, w = f32, h = f32| {
         s.size = (w.max(1.0) as u32, h.max(1.0) as u32);

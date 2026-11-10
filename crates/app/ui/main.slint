@@ -65,6 +65,7 @@ component ToolButton inherits Rectangle {
 
 // Large, forgiving slider: a 40 px track you can press anywhere, plus - / + buttons for exact steps.
 component BigSlider inherits HorizontalLayout {
+    alignment: start;
     in property <string> label;
     in property <float> value;
     in property <float> minimum: 0;
@@ -80,7 +81,9 @@ component BigSlider inherits HorizontalLayout {
         width: root.track-width;
         height: Theme.hit;
         border-radius: 6px * Theme.scale;
-        background: Theme.surface;
+        background: Theme.panel;
+        border-width: 1px;
+        border-color: Theme.muted;
         Rectangle {
             x: 0; y: (parent.height - self.height) / 2;
             height: 8px * Theme.scale; border-radius: 4px * Theme.scale;
@@ -191,6 +194,8 @@ export component MainWindow inherits Window {
     in-out property <bool> show-doc: true;
     in-out property <bool> show-sliders: true;
     in-out property <bool> show-find: false;
+    // under 700 px only one of canvas / page fits; the canvas is the default
+    in-out property <bool> doc-on-narrow: false;
     in-out property <string> drag-src;
     in property <data-transfer> drag-data;
 
@@ -290,6 +295,8 @@ export component MainWindow inherits Window {
     in property <[DeviceRow]> tablet-devices;
 
     callback window-resized(length, length);
+    callback doc-resized(length);
+    changed doc-content-w => { root.doc-resized(root.doc-content-w); }
     callback shortcut(string, bool, bool, bool, bool) -> bool;   // key, ctrl, alt, shift, meta
     callback plain-key(string) -> bool;
     callback run-command(string);
@@ -459,7 +466,7 @@ export component MainWindow inherits Window {
                     ToolButton { label: root.page-favorite ? "★" : "☆"; tip: "Favourite"; active: root.page-favorite; clicked => { root.run-command("favorite"); } }
                     tmpl := ComboBox { width: 150px * Theme.scale; height: Theme.hit; model: root.templates; current-index: 1; }
                     ToolButton { label: "+ Page"; clicked => { root.new-page(tmpl.current-value); } }
-                    ToolButton { label: "Page"; active: root.show-doc; tip: "Show the typeset page"; clicked => { root.run-command("toggle-doc"); } }
+                    ToolButton { label: "Page"; active: root.tiny ? root.doc-on-narrow : root.show-doc; tip: "Show the typeset page"; clicked => { root.run-command("toggle-doc"); } }
                     exp := ComboBox { width: 120px * Theme.scale; height: Theme.hit; model: root.export-formats; current-index: 0; }
                     ToolButton { label: "Export"; clicked => { root.export-page(exp.current-value); } }
                     ToolButton { label: "Graph"; active: root.graph-mode; clicked => { root.run-command("graph"); } }
@@ -586,9 +593,8 @@ export component MainWindow inherits Window {
                             edited(t) => { root.do-search(t); }
                         }
                         ComboBox { height: Theme.hit; model: root.filters; current-index: root.filter-index; selected => { root.set-filter(self.current-index); } }
-                        HorizontalLayout {
-                            spacing: 4px;
-                            alignment: start;
+                        ScrollRow {
+                            pad: 0px;
                             ToolButton { label: "+ Section"; clicked => { root.run-command("new-section"); } }
                             ToolButton { label: "Trash"; clicked => { root.run-command("trash"); } }
                             ToolButton { label: "History"; tip: "Version history of this page"; clicked => { root.run-command("history"); } }
@@ -629,7 +635,7 @@ export component MainWindow inherits Window {
                     }
                 }
                 // content: ink canvas or graph
-                if !root.graph-mode && !(root.tiny && root.show-doc && !root.present-mode) : canvas := Rectangle {
+                if !root.graph-mode && !(root.tiny && root.doc-on-narrow && !root.present-mode) : canvas := Rectangle {
                     background: Theme.bg;
                     clip: true;
                     changed width => { root.canvas-resized(self.width, self.height); }
@@ -655,7 +661,7 @@ export component MainWindow inherits Window {
                     if root.focus-mode || root.present-mode : ToolButton { x: parent.width - self.width - 8px; y: 8px; label: "Exit (Esc)"; clicked => { root.run-command(root.present-mode ? "present" : "focus"); } }
                 }
                 // page document: typeset blocks, editor, outline, backlinks
-                if root.show-doc && !root.graph-mode : Rectangle {
+                if (root.tiny ? root.doc-on-narrow : root.show-doc) && !root.graph-mode : Rectangle {
                     width: root.tiny || (root.present-mode && root.split-active == false && root.focus-mode == false && false) ? root.win-w : root.doc-w;
                     background: Theme.panel;
                     VerticalLayout {
@@ -684,11 +690,11 @@ export component MainWindow inherits Window {
                                 for b in (root.split-active ? root.split-blocks : root.blocks) : Rectangle {
                                     background: b.idx == root.editing-index ? Theme.hover : bta.has-hover ? Theme.surface : transparent;
                                     border-radius: 6px;
-                                    min-height: Theme.hit;
+                                    height: max(Theme.hit, bv.preferred-height);
                                     bta := TouchArea { }
-                                    VerticalLayout {
+                                    bv := VerticalLayout {
                                         padding: 4px;
-                                        if b.has-image : Image { source: b.image; width: root.doc-content-w; image-fit: contain; horizontal-alignment: left; }
+                                        if b.has-image : Image { source: b.image; width: root.doc-content-w; height: root.doc-content-w * self.source.height / max(1, self.source.width); image-fit: contain; horizontal-alignment: left; }
                                         if !b.has-image : Text { text: b.error != "" ? "⚠ " + b.error + "\n" + b.text : b.text; color: b.error != "" ? Theme.urgent : Theme.text; wrap: word-wrap; }
                                         if !root.split-active && (bta.has-hover || b.idx == root.editing-index) : HorizontalLayout {
                                             spacing: 3px; alignment: end;
@@ -971,6 +977,8 @@ export component MainWindow inherits Window {
             vertical-stretch: 1;
             property <int> cols: max(4, floor(self.visible-width / (64px * Theme.scale)));
             Rectangle {
+                x: 0; y: 0;
+                width: sgrid.visible-width;
                 height: ceil(root.symbols.length / max(1, parent.cols)) * 64px * Theme.scale;
                 for s[i] in root.symbols : Rectangle {
                     x: mod(i, max(1, sgrid.cols)) * 64px * Theme.scale;
@@ -979,7 +987,7 @@ export component MainWindow inherits Window {
                     border-radius: 6px;
                     background: sya.has-hover ? Theme.hover : Theme.surface;
                     accessible-role: button; accessible-label: s.name;
-                    Text { text: s.sym; color: Theme.text; font-size: 24px * Theme.scale; horizontal-alignment: center; vertical-alignment: center; }
+                    Text { text: s.sym; color: Theme.text; font-size: (s.sym.character-count > 2 ? 15px : 24px) * Theme.scale; horizontal-alignment: center; vertical-alignment: center; }
                     Text { y: parent.height - 14px * Theme.scale; width: parent.width; text: s.name; color: Theme.muted; font-size: 9px * Theme.scale; horizontal-alignment: center; overflow: elide; }
                     sya := TouchArea { clicked => { root.insert-symbol(s.sym); } }
                 }
@@ -1050,7 +1058,7 @@ export component MainWindow inherits Window {
                 }
                 SectionTitle { text: "Size"; }
                 BigSlider { label: "UI scale"; display: Math.round(root.ui-scale * 100) + "%"; value: root.ui-scale; minimum: 0.75; maximum: 2.0; step: 0.05; track-width: 240px * Theme.scale; changed(v) => { root.set-ui-scale(v); } }
-                CheckBox { text: "Tablet mode (larger targets, simpler toolbar)"; checked: root.tablet-mode; toggled => { root.toggle-setting("tablet-mode"); } }
+                CheckBox { text: "Tablet mode (25 % larger buttons and text for touch)"; checked: root.tablet-mode; toggled => { root.toggle-setting("tablet-mode"); } }
                 SectionTitle { text: "Ink and recognition"; }
                 BigSlider { label: "Smoothing"; display: Math.round(root.smoothing * 100) + "%"; value: root.smoothing; minimum: 0; maximum: 1; step: 0.05; track-width: 240px * Theme.scale; changed(v) => { root.set-smoothing(v); } }
                 BigSlider { label: "Recognize after"; display: Math.round(root.recog-delay) + " ms"; value: root.recog-delay; minimum: 200; maximum: 3000; step: 100; track-width: 240px * Theme.scale; changed(v) => { root.set-delay(v); } }

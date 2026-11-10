@@ -102,7 +102,13 @@ release.yml names fixed, version 1.0.0. Local and remote `main` are in sync.
 Do these in order:
 
 1. DONE: first CI runs are green on Ubuntu and Windows (see "State right now").
-2. **Click through the UI** (see "Known broken" item 3): overlays, widths 1500/940/620/480, short
+2. PARTLY DONE (2026-11-10): UI click-through at 1500/940/620/480, short height, HiDPI, light theme,
+   settings, symbols, graph. Fixed: canvas hidden under 700 px, blocks rendered at a fixed 380 px
+   and squashed into short cards, sliders spreading apart, invisible slider track, heavy light-theme
+   paper lines, symbol grid opening mid-list, clipped sidebar buttons. Not yet looked at: palette,
+   shortcuts, trash/history/backups, prompt, colours, tablet, lasso, focus screenshots (rendered in
+   the scratch folder only), and real pointer/drag behaviour in a live window. Original note:
+   **Click through the UI** (see "Known broken" item 3): overlays, widths 1500/940/620/480, short
    heights, `SCRAWL_SHOT_SCALE=2`, `SCRAWL_SHOT_THEME=light`. Fix layout bugs found.
 3. **MATLAB `for` loops** (item 6): implement in `crates/media/src/matlab.rs` or the `matlab`
    screenshot scene stays broken.

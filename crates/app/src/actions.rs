@@ -282,7 +282,11 @@ pub fn run(ui: &MainWindow, s: &mut State, id: &str) {
         "fullscreen" => ui.window().set_fullscreen(!ui.window().is_fullscreen()),
         "toggle-sidebar" => ui.set_show_sidebar(!ui.get_show_sidebar()),
         "toggle-doc" => {
-            ui.set_show_doc(!ui.get_show_doc());
+            if ui.get_win_w() < 700.0 {
+                ui.set_doc_on_narrow(!ui.get_doc_on_narrow());
+            } else {
+                ui.set_show_doc(!ui.get_show_doc());
+            }
             s.dirty |= dirty::DOC;
         }
         "split-close" => {
