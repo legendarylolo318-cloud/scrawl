@@ -25,7 +25,7 @@ jobs:
         run: ./target/release/scrawl --self-test
       - name: Package AppImage (linuxdeploy)
         run: |
-          curl -fsSL -o linuxdeploy https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20250213-2/linuxdeploy-x86_64.AppImage
+          curl -fsSL -o linuxdeploy https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
           chmod +x linuxdeploy
           mkdir -p AppDir
           VERSION="${TAG#v}" ./linuxdeploy --appimage-extract-and-run --appdir AppDir \
@@ -59,8 +59,10 @@ jobs:
       - name: Self-test the exe
         shell: pwsh
         run: |
-          ./dist/scrawl.exe --self-test
-          if ($LASTEXITCODE -ne 0) { throw "self-test failed" }
+          # release builds use the GUI subsystem: wait explicitly and read the real exit code
+          $p = Start-Process -FilePath ./dist/scrawl.exe -ArgumentList "--self-test" -Wait -PassThru -NoNewWindow -RedirectStandardOutput selftest.txt
+          Get-Content selftest.txt
+          if ($p.ExitCode -ne 0) { throw "self-test failed ($($p.ExitCode))" }
       - name: Portable exe
         shell: pwsh
         run: |
@@ -77,8 +79,9 @@ jobs:
         run: |
           $setup = Get-ChildItem dist/*-setup.exe | Select-Object -First 1
           Start-Process $setup.FullName -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/DIR=$PWD\installed" -Wait
-          & "$PWD\installed\scrawl.exe" --self-test
-          if ($LASTEXITCODE -ne 0) { throw "installed self-test failed" }
+          $p = Start-Process -FilePath "$PWD\installed\scrawl.exe" -ArgumentList "--self-test" -Wait -PassThru -NoNewWindow -RedirectStandardOutput installed-selftest.txt
+          Get-Content installed-selftest.txt
+          if ($p.ExitCode -ne 0) { throw "installed self-test failed ($($p.ExitCode))" }
       - uses: actions/upload-artifact@v4
         with:
           name: windows
