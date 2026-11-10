@@ -8,10 +8,12 @@ license.workspace = true
 cpal = "0.18.2"
 hayro = { version = "0.9.0", features = ["embed-fonts"] }
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+matfile = "0.5.0"
 opus-pure = "0.2.3"
 pdf-extract = "0.12.1"
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+tiny-skia.workspace = true
 
 [dev-dependencies]
 render = { path = "../render" }
