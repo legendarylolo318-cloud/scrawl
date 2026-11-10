@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<title>Inkwell tablet</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="pair" class="screen">
+  <h1>Inkwell</h1>
+  <p id="pair-msg">Scan the QR code shown on your computer, or reopen the link.</p>
+  <div id="code" class="code" hidden></div>
+  <p id="pair-help" hidden>Check that this code matches your computer, then press Approve there.</p>
+</div>
+<div id="main" class="screen" hidden>
+  <div id="bar">
+    <button id="undo" title="Undo">Undo</button>
+    <button id="redo" title="Redo">Redo</button>
+    <button id="recog" title="Recognize now">Recognize</button>
+    <button id="mode" title="Ink mode">Math</button>
+    <button id="pen" class="on">Pen</button>
+    <button id="hl">Highlight</button>
+    <button id="er">Eraser</button>
+    <input id="color" type="color" value="#c0caf5" aria-label="Ink colour">
+    <label class="chk"><input id="penonly" type="checkbox"> Pen only</label>
+    <span id="status">connecting…</span>
+    <button id="stop" class="warn">Disconnect</button>
+  </div>
+  <div id="strip"></div>
+  <div id="expr"></div>
+  <div id="templates">
+    <button data-t="fraction">a/b</button><button data-t="sqrt">√</button>
+    <button data-t="matrix">[ ]</button><button data-t="integral">∫</button>
+    <button data-t="sum">∑</button><button data-t="limit">lim</button>
+    <button data-t="cases">{</button><button data-t="abs">| |</button>
+    <button data-t="norm">‖ ‖</button><button data-t="deriv">d/dx</button><button data-t="vector">v⃗</button>
+  </div>
+  <canvas id="pad"></canvas>
+  <div id="typing"><input id="text" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Type math here (alpha, sqrt, ->, mat3x3 …) and press Enter"></div>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>

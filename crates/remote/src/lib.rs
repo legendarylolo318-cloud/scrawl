@@ -1,14 +1,5 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+//! Phone/tablet as a drawing tablet: HTTPS + WSS server, private CA, pairing. Off by default.
+pub mod ca;
+pub mod pairing;
+pub mod protocol;
+pub mod server;
