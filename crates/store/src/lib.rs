@@ -1,14 +1,15 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! Local-first storage: notebooks -> sections -> pages as human-readable Typst plus JSON
+//! sidecars, atomic writes, trash, history, backups, optional age encryption.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub mod backup;
+pub mod fsio;
+pub mod history;
+pub mod model;
+mod store;
+pub mod templates;
+pub mod vault;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use fsio::{iso_date, new_id, now_ms, Result, StoreError};
+pub use model::*;
+pub use store::{NotebookMeta, Store, TrashEntry, TRASH_RETENTION_MS};
+pub use vault::{Vault, VaultError};

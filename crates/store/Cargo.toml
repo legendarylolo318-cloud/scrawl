@@ -5,3 +5,9 @@ version.workspace = true
 license.workspace = true
 
 [dependencies]
+age = "0.12.1"
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+zip = "9.5.0"
+ink = { path = "../ink" }
+layout = { path = "../layout" }
