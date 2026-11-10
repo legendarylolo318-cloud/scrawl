@@ -11,7 +11,7 @@ pub mod templates;
 pub mod vault;
 
 pub use fsio::{iso_date, new_id, now_ms, Result, StoreError};
-pub use docmap::{blocks_from_doc, doc_from_page};
+pub use docmap::{block_of, blocks_from_doc, doc_from_page};
 pub use model::*;
 pub use store::{NotebookMeta, Store, TrashEntry, TRASH_RETENTION_MS};
 pub use vault::{Vault, VaultError};

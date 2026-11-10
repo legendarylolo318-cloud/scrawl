@@ -5,8 +5,10 @@
 //! the subset the old text blocks used. Anything the parser does not understand is kept verbatim as a
 //! `ParaKind::Markup` paragraph, so converting old pages never loses content.
 
+mod edit;
 mod markup;
 mod model;
 
+pub use edit::*;
 pub use markup::{escape_text, para_markup};
 pub use model::*;

@@ -231,6 +231,10 @@ pub struct Overlay<'a> {
     pub lasso: &'a [(f32, f32)],
     pub selection: Option<ink::Rect>,
     pub light: bool,
+    /// Document editor: selection highlight rectangles and the caret (x, y, height), page units.
+    pub doc_sel: &'a [(f32, f32, f32, f32)],
+    pub caret: Option<(f32, f32, f32)>,
+    pub accent: [u8; 3],
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -307,7 +311,7 @@ impl Canvas {
         }
         let mut buf = SharedPixelBuffer::<Rgba8Pixel>::new(w, h);
         if let Some(base) = &self.base {
-            let needs_overlay = live.is_some() || !overlay.lasso.is_empty() || overlay.selection.is_some();
+            let needs_overlay = live.is_some() || !overlay.lasso.is_empty() || overlay.selection.is_some() || overlay.caret.is_some() || !overlay.doc_sel.is_empty();
             if !needs_overlay {
                 buf.make_mut_bytes().copy_from_slice(base.data());
             } else {
@@ -342,6 +346,26 @@ fn draw_page_frames(pm: &mut Pixmap, (pw, ph): (f32, f32), view: View, px_scale:
 
 fn draw_overlay(pm: &mut Pixmap, o: &Overlay, view: View, px_scale: f32) {
     let to_px = |x: f32, y: f32| ((x * view.scale + view.ox) * px_scale, (y * view.scale + view.oy) * px_scale);
+    {
+        let [r, g, b] = o.accent;
+        let mut p = Paint::default();
+        p.set_color(Color::from_rgba8(r, g, b, 0x55));
+        for (x, y, w, h) in o.doc_sel {
+            let (x0, y0) = to_px(*x, *y);
+            let (x1, y1) = to_px(x + w, y + h);
+            if let Some(rr) = tiny_skia::Rect::from_ltrb(x0, y0, x1, y1) {
+                pm.fill_path(&PathBuilder::from_rect(rr), &p, FillRule::Winding, Transform::identity(), None);
+            }
+        }
+        if let Some((x, y, h)) = o.caret {
+            let (x0, y0) = to_px(x, y);
+            let (_, y1) = to_px(x, y + h);
+            p.set_color(Color::from_rgba8(r, g, b, 0xff));
+            if let Some(rr) = tiny_skia::Rect::from_ltrb(x0 - px_scale, y0, x0 + 1.5 * px_scale, y1) {
+                pm.fill_path(&PathBuilder::from_rect(rr), &p, FillRule::Winding, Transform::identity(), None);
+            }
+        }
+    }
     let mut paint = Paint::default();
     paint.set_color(Color::from_rgba8(0xe0, 0xaf, 0x68, 0xe0));
     paint.anti_alias = true;

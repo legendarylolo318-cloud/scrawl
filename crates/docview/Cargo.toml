@@ -1,0 +1,11 @@
+[package]
+name = "docview"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+notedoc = { path = "../doc" }
+cosmic-text = "0.19"
+tiny-skia.workspace = true
+typst-assets = { version = "0.15.1", features = ["fonts"] }

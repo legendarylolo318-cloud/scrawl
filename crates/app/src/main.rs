@@ -2,6 +2,7 @@
 
 mod actions;
 mod commands;
+mod docedit;
 mod graphview;
 mod handwriting;
 mod headless;
@@ -141,6 +142,9 @@ pub struct State {
     /// The open text box was started by typing (cursor goes after the first letter).
     pub textbox_typed: bool,
     pub textbox_first: String,
+    /// Hidden while the document editor is built: show the page as a document (setting or SCRAWL_NEW_EDITOR=1).
+    pub new_editor: bool,
+    pub dedit: docedit::DocEdit,
 }
 
 impl State {
@@ -213,9 +217,14 @@ impl State {
             type_cursor: None,
             textbox_typed: false,
             textbox_first: String::new(),
+            new_editor: settings.new_editor || std::env::var("SCRAWL_NEW_EDITOR").is_ok(),
+            dedit: docedit::DocEdit::new(Arc::new(render::MathCache::default())),
             settings,
         };
         st.width_from_pen(0);
+        if st.new_editor {
+            st.tool = Tool::TextBox;
+        }
         st.load_page_into_doc();
         st
     }
@@ -421,9 +430,11 @@ fn refresh_canvas(ui: &MainWindow, st: &mut State) {
         ink::bbox(&pts)
     };
     let light = st.light();
-    let texts = canvas_texts(st, scale);
+    let mut texts = canvas_texts(st, scale);
+    texts.extend(doc_layer(st, scale, w as f32, h as f32));
     let texts_key = { use std::hash::{Hash, Hasher}; let mut h = std::collections::hash_map::DefaultHasher::new(); for (x, y, p) in &texts { (x.to_bits(), y.to_bits(), Arc::as_ptr(p) as usize).hash(&mut h); } h.finish() };
-    let ov = Overlay { lasso: &st.lasso, selection: sel, light, texts: &texts, texts_key };
+    let (doc_sel, caret) = docedit::overlay_geometry(st);
+    let ov = Overlay { lasso: &st.lasso, selection: sel, light, texts: &texts, texts_key, doc_sel: &doc_sel, caret, accent: st.settings.colors().accent };
     let mut paper = st.paper;
     if light && paper.color[..3] == [0x41, 0x48, 0x68] {
         paper.color = [0xc4, 0xc9, 0xd9, 0xff];
@@ -546,6 +557,7 @@ fn refresh_tabs(ui: &MainWindow, st: &mut State) {
 }
 
 fn refresh_tools(ui: &MainWindow, st: &State) {
+    ui.set_new_editor(st.new_editor);
     ui.set_tool(match st.tool { Tool::Pen => "pen", Tool::Highlighter => "highlighter", Tool::Eraser => "eraser", Tool::Lasso => "lasso", Tool::TextBox => "textbox" }.into());
     ui.set_mode(if st.mode == InkMode::Drawing { "drawing" } else if st.text_mode { "text" } else { "math" }.into());
     match st.textbox {
@@ -944,6 +956,16 @@ fn main() -> Result<(), slint::PlatformError> {
             handled
         });
     }
+    {
+        let (st2, w) = (st.clone(), weak.clone());
+        ui.on_doc_key(move |key, ctrl, alt, shift, meta| {
+            let Some(ui) = w.upgrade() else { return false };
+            let s = &mut *st2.borrow_mut();
+            let handled = docedit::key(s, &key, ctrl, alt, shift, meta);
+            flush(&ui, s);
+            handled
+        });
+    }
     ui.on_run_command(with!(|ui, s, id = SharedString| actions::run(&ui, s, &id)));
 
     // ---- typing mode ------------------------------------------------------------------------
@@ -1231,6 +1253,22 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
 
+    // caret blink for the document editor
+    let blink = Rc::new(slint::Timer::default());
+    {
+        let (st2, weak2) = (st.clone(), weak.clone());
+        blink.start(slint::TimerMode::Repeated, std::time::Duration::from_millis(530), move || {
+            let Some(ui) = weak2.upgrade() else { return };
+            let Ok(mut s) = st2.try_borrow_mut() else { return };
+            if docedit::active(&s) && s.dedit.ed.sel.is_caret() {
+                s.dedit.ed.caret_on = !s.dedit.ed.caret_on;
+                s.dirty |= dirty::CANVAS;
+                flush(&ui, &mut s);
+            }
+        });
+    }
+    let _keep_blink = blink;
+
     // Save, remember the session, and stop the tablet server when the window closes.
     {
         let st2 = st.clone();
@@ -1276,6 +1314,7 @@ fn main() -> Result<(), slint::PlatformError> {
     }
 
     if let (Some(path), Some(win)) = (shot_path, shot_window) {
+        headless::settle(&win, &ui, 150);
         run_scene(&ui, &st, &std::env::var("SCRAWL_SHOT_SCENE").unwrap_or_default());
         {
             let s = &mut *st.borrow_mut();
@@ -1303,7 +1342,6 @@ fn run_scene(ui: &MainWindow, st: &Rc<RefCell<State>>, scene: &str) {
         ui.invoke_pointer_up();
     };
     let line = |a: (f32, f32), b: (f32, f32)| -> Vec<(f32, f32)> { (0..=20).map(|i| (a.0 + (b.0 - a.0) * i as f32 / 20.0, a.1 + (b.1 - a.1) * i as f32 / 20.0)).collect() };
-    ui.invoke_canvas_resized(900.0, 600.0);
     for scene in scene.split(',') {
         match scene {
             "draw" => {
@@ -1345,6 +1383,53 @@ fn run_scene(ui: &MainWindow, st: &Rc<RefCell<State>>, scene: &str) {
                 ui.invoke_graph_resized(1000.0, 560.0);
                 ui.invoke_graph_text_edited("".into());
                 ui.invoke_graph_run_matlab("x = linspace(0, 2*pi, 200);\ny = zeros(1, 200);\nfor k = 1:2:7\n  y = y + sin(k*x)/k;\nend\nplot(x, y); title('Square wave (for loop)')".into());
+            }
+            "doc" => {
+                let s = &mut *st.borrow_mut();
+                s.new_editor = true;
+                if let Some(ws) = &mut s.ws {
+                    let mut d = notedoc::Doc::from_markup("= Chain rule\nIf $f$ and $g$ are *differentiable* then the derivative of the composite $f(g(x))$ is $f'(g(x)) g'(x)$, see [[Limits]]. This paragraph is long enough to wrap onto a second and even a third line in a narrow window.\n\n== Things to remember\n- bullets work\n  - and nest\n- ☐ buy brandy\n- ☑ write the notes\n+ numbered one\n+ numbered two\n\n#quote(block: true)[A quotation in italics.]\n\nPlain closing paragraph with `code` and #underline[underline].");
+                    d.push(notedoc::ParaKind::MathDisplay { expr: layout::Expr::Frac(Box::new(layout::Expr::sym("a")), Box::new(layout::Expr::sym("b"))), source: None }, vec![]);
+                    d.push(notedoc::ParaKind::Rule, vec![]);
+                    ws.page.doc = Some(d);
+                }
+                s.dirty |= dirty::CANVAS;
+            }
+            "docedit" => {
+                {
+                    let s = &mut *st.borrow_mut();
+                    s.new_editor = true;
+                    s.tool = Tool::TextBox;
+                    if let Some(ws) = &mut s.ws {
+                        ws.page.doc = Some(notedoc::Doc::from_markup("= Meeting notes\nFirst paragraph of the notes."));
+                    }
+                    s.dirty |= dirty::CANVAS | dirty::TOOLS;
+                    flush(ui, s);
+                }
+                let key = |t: &str, ctrl: bool, shift: bool| {
+                    assert!(ui.invoke_doc_key(t.into(), ctrl, false, shift, false), "key {t:?} was not used");
+                };
+                let ty = |t: &str| t.chars().for_each(|c| key(&c.to_string(), false, false));
+                // click in the first paragraph, jump to the end, then Enter and type a list and some words
+                ui.invoke_pointer_down(120.0, 100.0);
+                ui.invoke_pointer_up();
+                key("\u{F72B}", false, false);
+                key("\n", false, false);
+                ty("- apples");
+                key("\n", false, false);
+                ty("bread and ");
+                ty("$x^2$");
+                key("\n", false, false);
+                key("\n", false, false);
+                ty("Done. Select this with the keyboard");
+                for _ in 0..8 {
+                    key("\u{F702}", true, true);
+                }
+                key("b", true, false);
+                let s = st.borrow();
+                let d = s.ws.as_ref().and_then(|w| w.page.doc.as_ref()).expect("document");
+                assert_eq!(d.paras[2].kind, notedoc::ParaKind::Bullet { indent: 0 }, "{:?}", d.paras);
+                assert!(d.paras.len() >= 5, "{:?}", d.paras);
             }
             "tablet" => ui.set_show_tablet(true),
             "notes" => {
@@ -1439,4 +1524,25 @@ fn canvas_texts(st: &mut State, px_scale: f32) -> Vec<(f32, f32, Arc<tiny_skia::
         }
     }
     out
+}
+
+/// The page's text paragraphs (new document editor) as pixmaps in page coordinates.
+fn doc_layer(st: &mut State, px_scale: f32, canvas_w: f32, canvas_h: f32) -> Vec<(f32, f32, Arc<tiny_skia::Pixmap>)> {
+    if !st.new_editor {
+        return vec![];
+    }
+    let colors = st.settings.colors();
+    let c = docview::Colors { text: colors.text, link: colors.accent, muted: colors.muted, accent: colors.accent };
+    let zoom = st.view.scale;
+    let col_w = docedit::DocEdit::column_width(canvas_w, zoom);
+    let Some(ws) = &mut st.ws else { return vec![] };
+    if ws.page.doc.is_none() {
+        ws.page.ensure_doc();
+        ws.touch();
+    }
+    st.dedit.objs.media = ws.page_media(&ws.page);
+    let Some(doc) = ws.page.doc.as_ref() else { return vec![] };
+    st.dedit.relayout(doc, col_w);
+    let (y0, y1) = (-st.view.oy / zoom, (canvas_h - st.view.oy) / zoom);
+    st.dedit.visible(doc, y0, y1, zoom * px_scale, &c)
 }

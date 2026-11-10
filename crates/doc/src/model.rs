@@ -172,3 +172,40 @@ pub fn normalize(runs: Vec<Run>) -> Vec<Run> {
     }
     out
 }
+
+/// A position in the document: paragraph index and offset inside it (characters; inline math counts 1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub struct Pos {
+    pub para: usize,
+    pub off: usize,
+}
+
+impl Pos {
+    pub fn new(para: usize, off: usize) -> Pos {
+        Pos { para, off }
+    }
+}
+
+/// Caret and selection: `head` is where the caret is, `anchor` where the selection started.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct Sel {
+    pub anchor: Pos,
+    pub head: Pos,
+}
+
+impl Sel {
+    pub fn caret(p: Pos) -> Sel {
+        Sel { anchor: p, head: p }
+    }
+    pub fn is_caret(&self) -> bool {
+        self.anchor == self.head
+    }
+    /// (start, end) in document order.
+    pub fn ordered(&self) -> (Pos, Pos) {
+        if self.anchor <= self.head {
+            (self.anchor, self.head)
+        } else {
+            (self.head, self.anchor)
+        }
+    }
+}

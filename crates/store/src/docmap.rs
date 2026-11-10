@@ -96,6 +96,18 @@ pub fn blocks_from_doc(d: &Doc) -> Vec<Block> {
     out
 }
 
+/// The block an object paragraph stands for (for rendering it with the block renderer).
+pub fn block_of(kind: &ParaKind) -> Option<Block> {
+    Some(match kind {
+        ParaKind::MathDisplay { expr, source } => Block::Math { expr: expr.clone(), source: source.clone() },
+        ParaKind::Image { file, x, y, w, h, crop } => Block::Image { file: file.clone(), x: *x, y: *y, w: *w, h: *h, crop: *crop },
+        ParaKind::Plot { functions, x_range, y_range } => Block::Plot { functions: functions.clone(), x_range: *x_range, y_range: *y_range },
+        ParaKind::Rule => Block::Rule,
+        ParaKind::Markup(m) => Block::Text { markup: m.clone() },
+        _ => return None,
+    })
+}
+
 impl Page {
     /// Make sure the page has a document, converting old blocks and canvas text once.
     /// Returns true if it converted (the caller should snapshot the old page into history before saving).

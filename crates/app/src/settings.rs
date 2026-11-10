@@ -69,6 +69,8 @@ pub struct Settings {
     pub last_page: Option<String>,
     pub tabs: Vec<String>,
     pub show_doc: bool,
+    /// Show the page with the new document editor (off until it is finished).
+    pub new_editor: bool,
     pub show_sidebar: bool,
     pub tablet_idle_min: u64,
 }
@@ -106,6 +108,7 @@ impl Default for Settings {
             tabs: vec![],
             show_doc: true,
             show_sidebar: true,
+            new_editor: false,
             tablet_idle_min: 15,
         }
     }

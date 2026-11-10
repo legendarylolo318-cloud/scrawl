@@ -57,3 +57,14 @@ pub fn capture(window: &Rc<MinimalSoftwareWindow>, ui: &impl ComponentHandle, pa
     let pm = tiny_skia::Pixmap::from_vec(rgba, tiny_skia::IntSize::from_wh(w, h).unwrap()).ok_or("bad buffer")?;
     pm.save_png(path).map_err(|e| e.to_string())
 }
+
+/// Show the window and let it lay out, so the real canvas size reaches the app before a scene runs.
+pub fn settle(window: &Rc<MinimalSoftwareWindow>, ui: &impl ComponentHandle, ms: u64) {
+    let _ = ui.show();
+    let end = std::time::Instant::now() + std::time::Duration::from_millis(ms);
+    while std::time::Instant::now() < end {
+        slint::platform::update_timers_and_animations();
+        window.draw_if_needed(|_| {});
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}

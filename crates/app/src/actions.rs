@@ -39,7 +39,7 @@ fn pick_file(ui: &MainWindow, s: &mut State, title: &str, exts: &[&str], fallbac
     None
 }
 
-fn clipboard_text(t: &str) -> Result<(), String> {
+pub fn clipboard_text(t: &str) -> Result<(), String> {
     arboard::Clipboard::new().and_then(|mut c| c.set_text(t.to_string())).map_err(|e| format!("Clipboard unavailable: {e}"))
 }
 
@@ -75,6 +75,9 @@ fn selection_bbox(s: &State) -> Option<ink::Rect> {
 }
 
 pub fn pointer_down(s: &mut State, x: f32, y: f32) {
+    if docedit::pointer_down(s, x, y) {
+        return;
+    }
     let (px, py) = s.view.to_page(x, y);
     s.type_cursor = Some((px, py));
     s.down_at = Some(Instant::now());
@@ -105,6 +108,9 @@ pub fn pointer_down(s: &mut State, x: f32, y: f32) {
 }
 
 pub fn pointer_move(s: &mut State, x: f32, y: f32) {
+    if docedit::pointer_move(s, x, y) {
+        return;
+    }
     let Some(t0) = s.down_at else { return };
     let (px, py) = s.view.to_page(x, y);
     match s.tool {
@@ -136,6 +142,9 @@ pub fn pointer_move(s: &mut State, x: f32, y: f32) {
 
 /// Returns true when recognition should be scheduled.
 pub fn pointer_up(ui: &MainWindow, s: &mut State) -> bool {
+    if docedit::pointer_up(s) {
+        return false;
+    }
     if s.down_at.take().is_none() {
         return false;
     }
@@ -347,6 +356,9 @@ pub fn run(ui: &MainWindow, s: &mut State, id: &str) {
         "undo" if undo_text(s) => s.set_status("Undid the typed text change (Redo puts it back)"),
         "redo" if redo_text(s) => s.set_status("Redid the typed text change"),
         "undo" | "redo" => {
+            if s.new_editor && ((id == "undo" && docedit::undo(s)) || (id == "redo" && docedit::redo(s))) {
+                return;
+            }
             if s.typing && id == "undo" && !s.editor.expr().is_empty() {
                 s.editor.backspace();
                 s.dirty |= dirty::STRIP;

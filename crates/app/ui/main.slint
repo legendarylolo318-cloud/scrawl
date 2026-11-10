@@ -203,6 +203,7 @@ export component MainWindow inherits Window {
     in property <image> frame;
     in property <string> tool: "pen";
     in property <string> mode: "math";
+    in property <bool> new-editor: false;
     in property <bool> pixel-erase: false;
     in property <bool> can-undo: false;
     in property <bool> can-redo: false;
@@ -304,6 +305,7 @@ export component MainWindow inherits Window {
     changed doc-content-w => { root.doc-resized(root.doc-content-w); }
     callback shortcut(string, bool, bool, bool, bool) -> bool;   // key, ctrl, alt, shift, meta
     callback plain-key(string) -> bool;
+    callback doc-key(string, bool, bool, bool, bool) -> bool;   // key, ctrl, alt, shift, meta: the document editor
     callback run-command(string);
     callback canvas-resized(length, length);
     callback pointer-down(length, length);
@@ -406,6 +408,9 @@ export component MainWindow inherits Window {
             reject
         }
         key-pressed(e) => {
+            if root.new-editor && !root.typing {
+                if root.doc-key(e.text, e.modifiers.control, e.modifiers.alt, e.modifiers.shift, e.modifiers.meta) { return accept; }
+            }
             if root.typing {
                 if e.text == Key.Backspace { root.type-nav("backspace"); return accept; }
                 if e.text == Key.Tab { root.type-nav("tab"); return accept; }
