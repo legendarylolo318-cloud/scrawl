@@ -150,6 +150,8 @@ pub struct State {
     /// Hidden while the document editor is built: show the page as a document (setting or SCRAWL_NEW_EDITOR=1).
     /// The handwriting suggestion was dismissed (Keep as ink) until the next stroke.
     pub chip_dismissed: bool,
+    /// Handwriting becomes words or math by itself, depending on what the ink reads as.
+    pub mode_auto: bool,
     pub new_editor: bool,
     pub dedit: docedit::DocEdit,
 }
@@ -226,6 +228,7 @@ impl State {
             textbox_typed: false,
             textbox_first: String::new(),
             chip_dismissed: false,
+            mode_auto: true,
             new_editor: (settings.new_editor || std::env::var("SCRAWL_NEW_EDITOR").is_ok()) && std::env::var("SCRAWL_OLD_EDITOR").is_err(),
             dedit: docedit::DocEdit::new(Arc::new(render::MathCache::default())),
             settings,
@@ -283,6 +286,7 @@ impl State {
             self.paper.spacing = ws.page.paper.spacing;
             self.background = ws.page.pdf_background.as_ref().and_then(|name| ws.media(name)).and_then(|png| decode_background(&png));
             // each page remembers its ink mode (the "notes" template opens in Text mode)
+            self.mode_auto = self.new_editor && ws.page.ink_mode.is_none();
             match ws.page.ink_mode.as_deref() {
                 Some("text") => {
                     self.mode = InkMode::MathText;
@@ -752,6 +756,13 @@ pub fn run_recognition(ui: &MainWindow, st: &mut State) {
         Ok(()) => {
             if st.session.symbols.is_empty() && st.doc.strokes.iter().any(|s| s.mode == InkMode::MathText) {
                 st.set_status("Nothing to recognize");
+            }
+            if st.mode_auto && st.mode == InkMode::MathText && !st.typed_since_recog {
+                if st.speller.is_none() {
+                    st.speller = pagedoc::Speller::new();
+                }
+                let (t, _) = handwriting::to_text_alts(&st.session.symbols, st.speller.as_ref());
+                st.text_mode = looks_like_words(&t, st.speller.as_ref(), st.session.symbols.len());
             }
             if st.text_mode {
                 if st.speller.is_none() {
@@ -1650,6 +1661,7 @@ fn update_chip(ui: &MainWindow, st: &State) {
     let has_text = if st.text_mode { !st.text_result.trim().is_empty() } else { !current_expr(st).is_empty() };
     let show = st.new_editor && !st.chip_dismissed && !st.training && !st.typing && has_text && !st.session.symbols.is_empty() && st.tool != Tool::TextBox;
     ui.set_chip_visible(show);
+    ui.set_mode_auto(st.mode_auto);
     if !show {
         return;
     }
@@ -1662,4 +1674,27 @@ fn update_chip(ui: &MainWindow, st: &State) {
     ui.set_chip_y(y1 * st.view.scale + st.view.oy + 14.0);
     ui.set_chip_math(!st.text_mode);
     ui.set_chip_text(format!("“{}”", st.text_result.trim().replace('\n', " / ")).into());
+}
+
+/// Does this reading look like ordinary words (so the ink is handwriting, not a formula)?
+fn looks_like_words(text: &str, sp: Option<&pagedoc::Speller>, symbols: usize) -> bool {
+    let Some(sp) = sp else { return false };
+    let words: Vec<&str> = text.split_whitespace().collect();
+    symbols >= 2 && !words.is_empty() && words.iter().all(|w| w.chars().count() >= 2 && w.chars().all(char::is_alphabetic) && sp.is_word(&w.to_lowercase()))
+}
+
+#[cfg(test)]
+mod auto_mode_tests {
+    use super::*;
+
+    #[test]
+    fn words_are_told_from_formulas() {
+        let sp = pagedoc::Speller::new();
+        assert!(looks_like_words("slate", sp.as_ref(), 5));
+        assert!(looks_like_words("hello world", sp.as_ref(), 10));
+        assert!(!looks_like_words("x2", sp.as_ref(), 2));
+        assert!(!looks_like_words("q", sp.as_ref(), 1));
+        assert!(!looks_like_words("xqz", sp.as_ref(), 3));
+        assert!(!looks_like_words("slate", None, 5));
+    }
 }

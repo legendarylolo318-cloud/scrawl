@@ -122,6 +122,7 @@ cmds! {
     "fmt-link", "Link text to a page or web address", "", "Text";
     "insert-table", "Insert a table", "", "Page";
     "chip-dismiss", "Keep handwriting as ink (dismiss the suggestion)", "", "Ink";
+    "chip-toggle-words", "Read the handwriting as words instead of math (or the other way)", "", "Ink";
     "outline", "Outline of this page (headings)", "", "Page";
     "word-count", "Word count", "", "Page";
     "today", "Open today's note", "", "Notes";

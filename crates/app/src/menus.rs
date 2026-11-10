@@ -112,7 +112,7 @@ pub const MORE: &[Item] = items! {
 /// Commands that live in the pen tray, formatting bar, suggestion chip or top bar buttons.
 #[cfg_attr(not(test), allow(dead_code))]
 pub const ELSEWHERE: &[&str] = &[
-    "pen", "highlighter", "eraser", "lasso", "pen1", "pen2", "pen3", "mode-text", "mode-drawing", "textbox", "undo", "redo", "delete-selection", "recognize", "insert", "chip-dismiss",
+    "pen", "highlighter", "eraser", "lasso", "pen1", "pen2", "pen3", "mode-text", "mode-drawing", "chip-toggle-words", "textbox", "undo", "redo", "delete-selection", "recognize", "insert", "chip-dismiss",
     "obj-smaller", "obj-larger", "obj-crop", "obj-uncrop", "obj-copy-latex", "obj-copy-typst", "obj-delete", "fmt-body", "fmt-h3", "fmt-bold", "fmt-italic", "fmt-underline", "fmt-indent", "fmt-outdent", "toggle-sidebar", "back", "forward", "new-page", "search",
 ];
 

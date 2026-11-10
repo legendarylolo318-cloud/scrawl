@@ -316,6 +316,14 @@ pub fn run(ui: &MainWindow, s: &mut State, id: &str) {
             ask(ui, s, Prompt::LinkTarget, "Link", "A page title, or a web address starting with http", false);
             return;
         }
+        "chip-toggle-words" => {
+            s.mode_auto = false;
+            s.text_mode = !s.text_mode;
+            s.text_result.clear();
+            s.chip_dismissed = false;
+            run_recognition(ui, s);
+            return;
+        }
         "chip-dismiss" => {
             s.chip_dismissed = true;
             s.dirty |= dirty::STRIP | dirty::CANVAS;
@@ -1587,12 +1595,13 @@ pub fn housekeeping(ui: &MainWindow, s: &mut State) {
 
 /// Math / Text / Drawing. Text and Math both recognize ink; Text turns it into words.
 pub fn set_mode(s: &mut State, m: &str) {
+    s.mode_auto = m == "auto";
     s.mode = if m == "drawing" { InkMode::Drawing } else { InkMode::MathText };
     s.text_mode = m == "text";
     s.text_result.clear();
     clear_expression(s);
     if let Some(w) = &mut s.ws {
-        let want = Some(m.to_string()).filter(|m| m != "math");
+        let want = Some(m.to_string()).filter(|m| m != "math" && m != "auto");
         if w.page.ink_mode != want {
             w.page.ink_mode = want;
             w.touch();

@@ -355,6 +355,7 @@ export component MainWindow inherits Window {
     in property <length> chip-y;
     in property <string> chip-text;
     in property <bool> chip-math: false;
+    in property <bool> mode-auto: false;
     callback open-menu(string);
     in property <bool> pixel-erase: false;
     in property <bool> can-undo: false;
@@ -943,6 +944,7 @@ export component MainWindow inherits Window {
                                 spacing: 6px;
                                 if root.chip-math && root.has-expr-image : Image { source: root.expr-image; height: Theme.hit; image-fit: contain; horizontal-stretch: 1; }
                                 if !(root.chip-math && root.has-expr-image) : Text { text: root.chip-text; color: Theme.text; font-size: Theme.fs * 1.2; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+                                ToolButton { label: root.chip-math ? "As words" : "As math"; tip: "Read this handwriting the other way"; clicked => { root.run-command("chip-toggle-words"); } }
                                 ToolButton { label: "✓ Accept"; active: true; tip: "Put it in the page (Ctrl+Enter)"; clicked => { root.run-command("insert"); fs.focus(); } }
                                 ToolButton { label: "Keep ink"; tip: "Leave it as handwriting"; clicked => { root.run-command("chip-dismiss"); fs.focus(); } }
                             }
@@ -1029,8 +1031,9 @@ export component MainWindow inherits Window {
                                     Text { text: "Handwriting becomes"; color: Theme.muted; font-size: Theme.fs-small; }
                                     HorizontalLayout {
                                         spacing: 4px; alignment: start;
-                                        ToolButton { label: "Math"; active: root.mode == "math"; clicked => { root.set-mode("math"); } }
-                                        ToolButton { label: "Words"; active: root.mode == "text"; clicked => { root.set-mode("text"); } }
+                                        ToolButton { label: "Auto"; tip: "Decide between words and math from what you write"; active: root.mode-auto && root.mode != "drawing"; clicked => { root.set-mode("auto"); } }
+                                        ToolButton { label: "Math"; active: root.mode == "math" && !root.mode-auto; clicked => { root.set-mode("math"); } }
+                                        ToolButton { label: "Words"; active: root.mode == "text" && !root.mode-auto; clicked => { root.set-mode("text"); } }
                                         ToolButton { label: "Drawing"; tip: "Keep it as a drawing; lines, circles and boxes snap"; active: root.mode == "drawing"; clicked => { root.set-mode("drawing"); } }
                                     }
                                     if root.tool == "eraser" : ToolButton { label: root.pixel-erase ? "Eraser: part of a stroke" : "Eraser: whole stroke"; clicked => { root.toggle-pixel-erase(); } }
