@@ -72,7 +72,8 @@ pub const MORE: &[Item] = items! {
         "favorite", "Pin or unpin", "Ctrl+D";
         "outline", "Outline", "";
         "word-count", "Word count", "";
-        "find", "Find and replace", "Ctrl+F";
+        "find", "Find", "Ctrl+F";
+        "replace", "Replace", "Ctrl+H";
         "duplicate", "Duplicate", "";
         "history", "Version history", "";
         "save-template", "Save as a template", "";
@@ -94,7 +95,6 @@ pub const MORE: &[Item] = items! {
         "focus", "Focus mode", "F9";
         "present", "Presentation", "F5";
         "fullscreen", "Full screen", "F11";
-        "split", "Open another page beside this one", "";
         "zoom-in", "Zoom in", "Ctrl+=";
         "zoom-out", "Zoom out", "Ctrl+-";
     ]
@@ -119,7 +119,7 @@ pub const ELSEWHERE: &[&str] = &[
 /// Reachable from the command palette (Ctrl+K) and their own screens only, on purpose.
 #[cfg_attr(not(test), allow(dead_code))]
 pub const PALETTE_ONLY: &[&str] = &[
-    "typing", "copy-unicode", "tmpl-frac", "tmpl-sqrt", "tmpl-int", "tmpl-sum", "tmpl-lim", "tmpl-matrix", "tmpl-cases", "tmpl-deriv", "theme-dark", "theme-light", "theme-contrast", "text-block", "toggle-doc", "next-tab", "close-tab", "play", "zoom-reset", "backup", "restore-backup", "split-close", "save-graph",
+    "typing", "copy-unicode", "tmpl-frac", "tmpl-sqrt", "tmpl-int", "tmpl-sum", "tmpl-lim", "tmpl-matrix", "tmpl-cases", "tmpl-deriv", "theme-dark", "theme-light", "theme-contrast", "text-block", "toggle-doc", "next-tab", "close-tab", "play", "zoom-reset", "backup", "restore-backup", "split", "split-close", "save-graph",
 ];
 
 pub fn menu(name: &str) -> &'static [Item] {

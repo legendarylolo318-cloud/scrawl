@@ -23,6 +23,8 @@ pub struct Document {
     undo: Vec<Edit>,
     redo: Vec<Edit>,
     next_id: u64,
+    /// Number of new edits made so far (not counting undo and redo), so callers can tell when the ink changed.
+    pub ops: u64,
 }
 
 impl Document {
@@ -33,7 +35,7 @@ impl Document {
     /// Document pre-loaded with saved strokes (history starts empty).
     pub fn with_strokes(strokes: Vec<Stroke>) -> Self {
         let next_id = strokes.iter().map(|s| s.id).max().unwrap_or(0);
-        Self { strokes, undo: vec![], redo: vec![], next_id }
+        Self { strokes, undo: vec![], redo: vec![], next_id, ops: 0 }
     }
 
     pub fn alloc_id(&mut self) -> u64 {
@@ -48,6 +50,7 @@ impl Document {
         let id = s.id;
         self.strokes.push(s.clone());
         self.undo.push(Edit::Add(s));
+        self.ops += 1;
         self.redo.clear();
         id
     }
@@ -73,6 +76,7 @@ impl Document {
         }
         let n = removed.len();
         self.undo.push(Edit::Replace { removed, added: vec![] });
+        self.ops += 1;
         self.redo.clear();
         n
     }
@@ -89,6 +93,7 @@ impl Document {
         self.strokes.extend(new.iter().cloned());
         let n = removed.len();
         self.undo.push(Edit::Replace { removed, added: new });
+        self.ops += 1;
         self.redo.clear();
         n
     }
@@ -175,6 +180,7 @@ impl Document {
         self.strokes.extend(added.iter().cloned());
         let n = removed.len();
         self.undo.push(Edit::Replace { removed, added });
+        self.ops += 1;
         self.redo.clear();
         n
     }

@@ -16,6 +16,8 @@ Not done / known gaps:
 - Math objects cannot be edited in place yet (delete and re-insert, or edit via copy LaTeX); no resize handles, only
   Smaller/Larger buttons; Shift+click selection and drag-selecting by word are missing; ink undo and text undo are
   separate stacks (text first).
+- Spell checking and split view belonged to the old side panel and are not shown in the document view yet
+  (split view is palette-only).
 - Pages are not auto-sorted; no sort option. Back-links are computed (`pagedoc::links`) but not shown under the page.
 - The old toolbars, `Block` text panel and `textbox_*` canvas text code still exist (`SCRAWL_OLD_EDITOR=1`); delete them
   once the owner is happy. Legacy scenes (`typehere`, `justtype`, `text`) need `SCRAWL_OLD_EDITOR=1`.

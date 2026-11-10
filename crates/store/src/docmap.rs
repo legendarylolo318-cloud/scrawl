@@ -30,6 +30,10 @@ pub fn doc_from_page(p: &Page) -> Doc {
     for b in &p.blocks {
         match b {
             Block::Text { markup } => d.append_markup(markup),
+            Block::Callout { kind, markup } if markup.trim().is_empty() => {
+                // an empty callout is still a box the user made
+                d.push(ParaKind::Callout(to_doc_kind(*kind)), vec![]);
+            }
             Block::Callout { kind, markup } => d.append_markup_as(markup, Some(to_doc_kind(*kind))),
             Block::Math { expr, source } => {
                 d.push(ParaKind::MathDisplay { expr: expr.clone(), source: source.clone() }, vec![]);
@@ -146,6 +150,7 @@ mod tests {
             Block::Text { markup: "#table(columns: 2, [a], [b])".into() },
             Block::Image { file: "a.png".into(), x: 1.0, y: 2.0, w: 120.0, h: 80.0, crop: Some([0.1, 0.1, 0.1, 0.1]) },
             Block::Plot { functions: vec!["y = sin(x)".into()], x_range: (-3.0, 3.0), y_range: None },
+            Block::Callout { kind: CalloutKind::Warning, markup: String::new() },
             Block::Rule,
         ];
         p.texts = vec![
@@ -207,4 +212,46 @@ mod tests {
         assert!(loaded.doc.is_some());
         std::fs::remove_dir_all(dir).ok();
     }
+}
+
+/// `SCRAWL_MIGRATE_CHECK=<notes folder> cargo test -p store --release migrate_real_notes -- --ignored`:
+/// converts every unencrypted page (and history snapshot) in memory and checks that no text, block or
+/// canvas text is lost. Nothing is written.
+#[test]
+#[ignore]
+fn migrate_real_notes() {
+    let Ok(root) = std::env::var("SCRAWL_MIGRATE_CHECK") else { return };
+    let mut checked = 0;
+    let mut stack = vec![std::path::PathBuf::from(root)];
+    while let Some(dir) = stack.pop() {
+        for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+                continue;
+            }
+            if p.extension().is_none_or(|x| x != "json") || !(p.to_string_lossy().contains("/pages/") || p.to_string_lossy().contains("/history/")) {
+                continue;
+            }
+            let Ok(bytes) = std::fs::read(&p) else { continue };
+            let Ok(page) = serde_json::from_slice::<Page>(&bytes) else { continue };
+            let mut q = page.clone();
+            q.doc = None;
+            q.ensure_doc();
+            let squash = |s: String| s.split_whitespace().collect::<String>();
+            let before = squash(page.blocks.iter().map(|b| crate::model::block_typst(b, None)).collect());
+            let after = squash(q.blocks.iter().map(|b| crate::model::block_typst(b, None)).collect());
+            if page.doc.is_none() {
+                assert!(after.starts_with(&before), "{}: text changed\nbefore {before}\nafter  {after}", p.display());
+            }
+            for t in &page.texts {
+                for line in t.text.lines().filter(|l| !l.trim().is_empty()) {
+                    assert!(q.doc.as_ref().unwrap().plain_text().contains(line.trim()), "{}: lost canvas text {line:?}", p.display());
+                }
+            }
+            assert_eq!(q.strokes, page.strokes);
+            checked += 1;
+        }
+    }
+    println!("checked {checked} pages and snapshots");
 }

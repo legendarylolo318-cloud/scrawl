@@ -59,6 +59,9 @@ pub enum Prompt {
     PlotFunctions,
     RestoreBackup(String),
     ExternalChange,
+    FindText,
+    ReplaceFind,
+    ReplaceWith(String),
     InlineMath,
     LinkTarget,
 }
@@ -152,6 +155,8 @@ pub struct State {
     pub chip_dismissed: bool,
     /// Handwriting becomes words or math by itself, depending on what the ink reads as.
     pub mode_auto: bool,
+    /// The last text searched with Find (the prompt is pre-filled with it).
+    pub last_find: String,
     pub new_editor: bool,
     pub dedit: docedit::DocEdit,
 }
@@ -229,6 +234,7 @@ impl State {
             textbox_first: String::new(),
             chip_dismissed: false,
             mode_auto: true,
+            last_find: String::new(),
             new_editor: (settings.new_editor || std::env::var("SCRAWL_NEW_EDITOR").is_ok()) && std::env::var("SCRAWL_OLD_EDITOR").is_err(),
             dedit: docedit::DocEdit::new(Arc::new(render::MathCache::default())),
             settings,
@@ -542,6 +548,9 @@ fn block_rows(st: &mut State, page: &store::Page, scale: f32) -> Vec<BlockRow> {
 }
 
 fn refresh_doc(ui: &MainWindow, st: &mut State) {
+    if st.new_editor {
+        return; // the old side panel is not shown
+    }
     let scale = ui.window().scale_factor();
     let Some(page) = st.ws.as_ref().map(|w| w.page.clone()) else { return };
     let rows = block_rows(st, &page, scale);
@@ -1503,10 +1512,42 @@ fn run_scene(ui: &MainWindow, st: &Rc<RefCell<State>>, scene: &str) {
                 draw(&o);
                 ui.invoke_run_command("recognize".into());
             }
+            "undoorder" => {
+                {
+                    let s = &mut *st.borrow_mut();
+                    s.new_editor = true;
+                    if let Some(ws) = &mut s.ws {
+                        ws.page.doc = Some(notedoc::Doc::from_markup("start"));
+                    }
+                    s.dirty |= dirty::CANVAS | dirty::TOOLS;
+                    flush(ui, s);
+                }
+                let words = |st: &Rc<RefCell<State>>| st.borrow().ws.as_ref().and_then(|w| w.page.doc.as_ref()).map(|d| d.plain_text()).unwrap_or_default();
+                let ink = |st: &Rc<RefCell<State>>| st.borrow().doc.strokes.len();
+                ui.invoke_set_tool("pen".into());
+                draw(&line((100.0, 300.0), (200.0, 300.0)));
+                // a letter typed with the pen tool switches to typing at the end of the text
+                assert!(ui.invoke_doc_key("x".into(), false, false, false, false));
+                assert_eq!(words(st), "startx");
+                ui.invoke_set_tool("pen".into());
+                draw(&line((100.0, 350.0), (200.0, 350.0)));
+                draw(&line((100.0, 400.0), (200.0, 400.0)));
+                assert_eq!(ink(st), 3);
+                ui.invoke_run_command("undo".into());
+                assert_eq!((ink(st), words(st).as_str()), (2, "startx"), "the last change (ink) is undone first");
+                ui.invoke_run_command("undo".into());
+                assert_eq!(ink(st), 1, "both newer strokes before the older text");
+                ui.invoke_run_command("undo".into());
+                assert_eq!((ink(st), words(st).as_str()), (1, "start"), "then the typing");
+                ui.invoke_run_command("redo".into());
+                assert_eq!(words(st), "startx");
+                println!("undo order: ok");
+            }
             "menu" => ui.invoke_open_menu("insert".into()),
             "menumore" => ui.invoke_open_menu("more".into()),
             "drawer" => ui.set_drawer_open(true),
             "tray" => ui.set_tray_panel("settings".into()),
+            "trayhidden" => ui.set_tray_open(false),
             "docink" => {
                 {
                     let s = &mut *st.borrow_mut();

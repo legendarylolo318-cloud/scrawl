@@ -144,6 +144,12 @@ pub fn delete_range(doc: &mut Doc, a: Pos, b: Pos) -> Pos {
 /// Insert `text` (may contain newlines = new paragraphs) replacing the selection.
 pub fn insert_text(doc: &mut Doc, sel: Sel, text: &str, style: Style) -> Pos {
     let (s, e) = sel.ordered();
+    // typing over a selected object puts the text where the object was
+    if s.para == e.para && s.off == 0 && e.off == 1 && doc.paras.get(s.para).is_some_and(|p| !p.kind.is_text()) {
+        let np = new_para(doc, ParaKind::Body, vec![]);
+        doc.paras[s.para] = np;
+        return insert_text(doc, Sel::caret(Pos { para: s.para, off: 0 }), text, style);
+    }
     let mut pos = delete_range(doc, s, e);
     ensure_not_empty(doc);
     let mut first = true;
@@ -789,5 +795,80 @@ mod tests {
         assert!(indent(&mut doc, p(1, 0), p(1, 0), 1));
         assert_eq!(doc.paras[1].kind, ParaKind::Bullet { indent: 1 });
         assert!(!indent(&mut doc, p(0, 0), p(0, 0), -1));
+    }
+}
+
+#[cfg(test)]
+mod mixed_tests {
+    use super::*;
+
+    fn p(para: usize, off: usize) -> Pos {
+        Pos { para, off }
+    }
+
+    fn doc_with_rule() -> Doc {
+        let mut d = Doc::from_markup("before\n\nafter");
+        d.paras.insert(1, Para { id: 99, kind: ParaKind::Rule, runs: vec![] });
+        d
+    }
+
+    #[test]
+    fn selection_through_an_object_removes_it_and_joins_nothing_wrongly() {
+        let mut d = doc_with_rule();
+        let at = delete_range(&mut d, p(0, 3), p(2, 2));
+        assert_eq!(d.paras.iter().map(|x| x.plain()).collect::<Vec<_>>(), ["befter"]);
+        assert_eq!(at, p(0, 3));
+    }
+
+    #[test]
+    fn selection_ending_on_an_object_keeps_the_object_when_it_is_not_covered() {
+        let mut d = doc_with_rule();
+        delete_range(&mut d, p(0, 3), p(1, 0));
+        assert_eq!(d.paras.len(), 3);
+        assert_eq!(d.paras[0].plain(), "bef");
+        assert!(matches!(d.paras[1].kind, ParaKind::Rule));
+    }
+
+    #[test]
+    fn selection_starting_after_an_object_keeps_it() {
+        let mut d = doc_with_rule();
+        delete_range(&mut d, p(1, 1), p(2, 2));
+        assert!(matches!(d.paras[1].kind, ParaKind::Rule));
+        assert_eq!(d.paras[2].plain(), "ter");
+    }
+
+    #[test]
+    fn whole_object_selected_then_typing_replaces_it_with_text() {
+        let mut d = doc_with_rule();
+        let at = insert_text(&mut d, Sel { anchor: p(1, 0), head: p(1, 1) }, "x", Style::default());
+        assert!(d.paras.iter().all(|q| q.kind != ParaKind::Rule));
+        assert!(d.paras.iter().any(|q| q.plain() == "x"), "{:?}", d.paras);
+        assert_eq!(d.paras[at.para].plain(), "x");
+    }
+
+    #[test]
+    fn enter_and_backspace_never_panic_on_any_position() {
+        let base = {
+            let mut d = Doc::from_markup("= T\n\n- a\n- \n\nb $x$ c\n\n#table(columns: 1, [a])");
+            d.paras.insert(2, Para { id: 77, kind: ParaKind::Rule, runs: vec![] });
+            d
+        };
+        for i in 0..base.paras.len() {
+            for off in 0..=base.paras[i].text_len().max(1) {
+                for op in 0..4 {
+                    let mut d = base.clone();
+                    let at = Sel::caret(p(i, off));
+                    let r = match op {
+                        0 => enter(&mut d, at.head),
+                        1 => backspace(&mut d, at),
+                        2 => delete_forward(&mut d, at),
+                        _ => insert_text(&mut d, at, "q\nw", Style::default()),
+                    };
+                    assert!(!d.paras.is_empty());
+                    let c = clamp(&d, r);
+                    assert_eq!(c, r, "op {op} at {i}:{off} returned an out-of-range caret");
+                }
+            }
+        }
     }
 }

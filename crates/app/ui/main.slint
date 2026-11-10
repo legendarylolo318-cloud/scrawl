@@ -618,7 +618,7 @@ export component MainWindow inherits Window {
                 }
             }
             // ---- selected image / plot / math object
-            if root.new-editor && root.tool == "textbox" && root.obj-kind != "" && !root.focus-mode && !root.present-mode : Rectangle {
+            if root.new-editor && !root.graph-mode && root.tool == "textbox" && root.obj-kind != "" && !root.focus-mode && !root.present-mode : Rectangle {
                 background: Theme.panel;
                 height: Theme.hit + 12px * Theme.scale;
                 ScrollRow {
@@ -633,7 +633,7 @@ export component MainWindow inherits Window {
                 }
             }
             // ---- formatting bar: only while the text cursor is the tool
-            if root.new-editor && root.tool == "textbox" && root.obj-kind == "" && !root.focus-mode && !root.present-mode && !root.short : Rectangle {
+            if root.new-editor && !root.graph-mode && root.tool == "textbox" && root.obj-kind == "" && !root.focus-mode && !root.present-mode && !root.short : Rectangle {
                 background: Theme.panel;
                 height: Theme.hit + 12px * Theme.scale;
                 ScrollRow {
@@ -962,6 +962,7 @@ export component MainWindow inherits Window {
                     }
                     // ---- pen tray: floating, collapsible
                     if root.new-editor && !root.present-mode && !root.focus-mode && !root.tray-open : ToolButton {
+                        width: self.min-width; height: Theme.hit;
                         x: parent.width - self.width - 12px; y: parent.height - self.height - 12px;
                         label: "✎ Draw"; tip: "Show the pen tray"; active: root.tool != "textbox";
                         clicked => { root.tray-open = true; }
@@ -1041,7 +1042,7 @@ export component MainWindow inherits Window {
                             }
                         }
                     }
-                    if root.focus-mode || root.present-mode : ToolButton { x: parent.width - self.width - 8px; y: 8px; label: "Exit (Esc)"; clicked => { root.run-command(root.present-mode ? "present" : "focus"); } }
+                    if root.focus-mode || root.present-mode : ToolButton { width: self.min-width; height: Theme.hit; x: parent.width - self.width - 8px; y: 8px; label: "Exit (Esc)"; clicked => { root.run-command(root.present-mode ? "present" : "focus"); } }
                 }
                 // page document: typeset blocks, editor, outline, backlinks
                 if (root.tiny ? root.doc-on-narrow : root.show-doc) && !root.graph-mode && !root.new-editor : Rectangle {

@@ -308,6 +308,10 @@ pub fn run(ui: &MainWindow, s: &mut State, id: &str) {
             follow_link(s, &today);
             return;
         }
+        "replace" => {
+            ask(ui, s, Prompt::ReplaceFind, "Replace on this page", "Text to replace", false);
+            return;
+        }
         "fmt-math" => {
             ask(ui, s, Prompt::InlineMath, "Inline math", "Type math in Typst or LaTeX, for example x^2 + 1 or \\frac{a}{b}", false);
             return;
@@ -413,7 +417,7 @@ pub fn run(ui: &MainWindow, s: &mut State, id: &str) {
         "undo" if undo_text(s) => s.set_status("Undid the typed text change (Redo puts it back)"),
         "redo" if redo_text(s) => s.set_status("Redid the typed text change"),
         "undo" | "redo" => {
-            if s.new_editor && ((id == "undo" && docedit::undo(s)) || (id == "redo" && docedit::redo(s))) {
+            if s.new_editor && ((id == "undo" && docedit::undo_latest(s)) || (id == "redo" && docedit::redo_latest(s))) {
                 return;
             }
             if s.typing && id == "undo" && !s.editor.expr().is_empty() {
@@ -426,6 +430,8 @@ pub fn run(ui: &MainWindow, s: &mut State, id: &str) {
             } else {
                 s.doc.redo();
             }
+            // undo and redo are not new ink edits
+            s.dedit.ed.ink_seen = s.doc.ops;
             if let Some(w) = &mut s.ws {
                 w.page.ink_anchors.clear();
             }
@@ -582,6 +588,18 @@ pub fn run(ui: &MainWindow, s: &mut State, id: &str) {
             s.set_status("Type in the search box at the top of the sidebar (tag:name, after:2026-01-01, before:...)");
         }
         "find" => {
+            let selected = docedit::copy_text(s).unwrap_or_default();
+            if s.new_editor && !s.last_find.is_empty() && selected.to_lowercase() == s.last_find.to_lowercase() {
+                let f = s.last_find.clone();
+                if let Some((k, n)) = docedit::find_next(s, &f) {
+                    s.set_status(format!("Match {k} of {n}"));
+                }
+                return;
+            }
+            if s.new_editor {
+                ask(ui, s, Prompt::FindText, "Find on this page", "Text to find. Run Find again (Ctrl+F) to jump to the next match.", false);
+                return;
+            }
             ui.set_show_doc(true);
             ui.set_show_find(true);
             s.dirty |= dirty::DOC;
@@ -1202,6 +1220,18 @@ pub fn prompt_ok(ui: &MainWindow, s: &mut State, text: &str) {
         Prompt::ImagePath | Prompt::PdfPath | Prompt::MatPath if !t.is_empty() => {
             let path = PathBuf::from(t.trim_matches('"'));
             open_file(ui, s, &path);
+        }
+        Prompt::FindText if !t.is_empty() => {
+            s.last_find = t.to_string();
+            match docedit::find_next(s, t) {
+                Some((k, n)) if n > 0 => s.set_status(format!("Match {k} of {n}. Ctrl+F again jumps to the next one.")),
+                _ => s.set_status(format!("No \"{t}\" on this page")),
+            }
+        }
+        Prompt::ReplaceFind if !t.is_empty() => ask(ui, s, Prompt::ReplaceWith(t.to_string()), "Replace with", &format!("Every \"{t}\" on this page becomes:"), false),
+        Prompt::ReplaceWith(find) => {
+            let n = docedit::replace_all(s, &find, text);
+            s.set_status(format!("Replaced {n}"));
         }
         Prompt::InlineMath if !t.is_empty() => {
             let src = if layout::looks_like_latex(t) { layout::latex_to_typst(t) } else { t.trim_matches('$').trim().to_string() };

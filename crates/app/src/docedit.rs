@@ -133,11 +133,22 @@ pub struct EditState {
     pub caret_on: bool,
     /// The last mouse press has not moved (a click, not a drag-select).
     pub press_was_click: bool,
+    /// Which history (text or ink) each undo step belongs to, oldest first, so Ctrl+Z undoes the latest change.
+    pub order: Vec<Layer>,
+    pub redo_order: Vec<Layer>,
+    /// Ink edits already entered into `order` (compared with `ink::Document::ops`).
+    pub ink_seen: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Layer {
+    Doc,
+    Ink,
 }
 
 impl Default for EditState {
     fn default() -> Self {
-        Self { sel: Sel::default(), undo: vec![], redo: vec![], pending: None, last_kind: "", goal_x: None, dragging: false, click: None, caret_on: true, press_was_click: false }
+        Self { sel: Sel::default(), undo: vec![], redo: vec![], pending: None, last_kind: "", goal_x: None, dragging: false, click: None, caret_on: true, press_was_click: false, order: vec![], redo_order: vec![], ink_seen: 0 }
     }
 }
 
@@ -160,9 +171,12 @@ pub fn relayout(s: &mut State) {
 }
 
 fn snapshot(s: &mut State, kind: &'static str) {
+    note_ink(s);
     let Some(doc) = s.ws.as_ref().and_then(|w| w.page.doc.as_ref()) else { return };
     if kind.is_empty() || kind != s.dedit.ed.last_kind || s.dedit.ed.undo.is_empty() {
         s.dedit.ed.undo.push((doc.clone(), s.dedit.ed.sel));
+        s.dedit.ed.order.push(Layer::Doc);
+        s.dedit.ed.redo_order.clear();
         if s.dedit.ed.undo.len() > UNDO_LIMIT {
             s.dedit.ed.undo.remove(0);
         }
@@ -174,10 +188,12 @@ fn snapshot(s: &mut State, kind: &'static str) {
 fn after_edit(s: &mut State) {
     if let Some(ws) = &mut s.ws {
         ws.touch();
+        // keep the block copy current so export, print, search and history previews see the latest text
+        ws.page.sync_blocks();
     }
     relayout(s);
     s.dedit.ed.caret_on = true;
-    s.dirty |= dirty::CANVAS | dirty::DOC;
+    s.dirty |= dirty::CANVAS | dirty::TOOLS;
     scroll_to_caret(s);
 }
 
@@ -299,7 +315,7 @@ fn toggle(s: &mut State, f: Fmt) {
 
 /// Keyboard. `text` is Slint's key text. Returns true when the key was used.
 pub fn key(s: &mut State, text: &str, ctrl: bool, alt: bool, shift: bool, meta: bool) -> bool {
-    if !active(s) {
+    if !active(s) && !start_typing(s, text, ctrl || alt || meta) {
         return false;
     }
     let mut chars = text.chars();
@@ -681,7 +697,7 @@ pub fn command(s: &mut State, id: &str) -> bool {
         snapshot(s, "");
         if let Some((doc, _)) = doc_mut(s) {
             if k == K::Body {
-                for i in a.para..=b.para.min(doc.paras.len() - 1) {
+                for i in a.para..=b.para.min(doc.paras.len().saturating_sub(1)) {
                     if doc.paras[i].kind.is_text() {
                         doc.paras[i].kind = K::Body;
                     }
@@ -858,4 +874,175 @@ pub fn goto_para(s: &mut State, i: usize) {
     s.dedit.ed.sel = Sel::caret(Pos { para: i, off: 0 });
     s.view.oy = (-(it.top + MARGIN_Y - 16.0) * s.view.scale).min(0.0);
     s.dirty |= dirty::CANVAS | dirty::TOOLS;
+}
+
+/// A letter typed while a pen tool is active switches to the text cursor and types it (instead of the
+/// old floating text box). Digits 1-5 stay with the handwriting alternatives while they are shown.
+fn start_typing(s: &mut State, text: &str, modifier: bool) -> bool {
+    if !s.new_editor || modifier || s.tool == Tool::TextBox || !s.overlay.is_empty() || s.typing {
+        return false;
+    }
+    let mut cs = text.chars();
+    let (Some(ch), None) = (cs.next(), cs.next()) else { return false };
+    if ch.is_control() || ('\u{F700}'..='\u{F8FF}').contains(&ch) || ch == ' ' {
+        return false;
+    }
+    if ('1'..='5').contains(&ch) && !s.session.symbols.is_empty() {
+        return false;
+    }
+    if s.ws.as_ref().is_none_or(|w| w.page.doc.is_none()) {
+        return false;
+    }
+    if s.dedit.ed.sel == Sel::default() {
+        // no caret placed yet on this page: continue at the end, like opening a note
+        if let Some(end) = with_doc(s, notedoc::doc_end) {
+            s.dedit.ed.sel = Sel::caret(end);
+        }
+    }
+    s.tool = Tool::TextBox;
+    s.textbox = None;
+    s.dirty |= dirty::TOOLS | dirty::CANVAS;
+    true
+}
+
+// ---- find and replace --------------------------------------------------------------------------
+
+/// Every match of `needle` (case-insensitive), in document order.
+fn hits(doc: &Doc, needle: &str) -> Vec<Pos> {
+    let low = |c: char| c.to_lowercase().next().unwrap_or(c);
+    let pat: Vec<char> = needle.chars().map(low).collect();
+    let n = pat.len();
+    let mut hits: Vec<Pos> = Vec::new();
+    for (pi, p) in doc.paras.iter().enumerate() {
+        if !p.kind.is_text() {
+            continue;
+        }
+        // offsets in caret units: inline math counts as one placeholder character
+        let chars: Vec<char> = p.runs.iter().flat_map(|r| match r {
+            notedoc::Run::Text { text, .. } => text.chars().collect::<Vec<_>>(),
+            notedoc::Run::Math { .. } => vec!['\u{FFFC}'],
+        })
+        // one lower-case char per char, so offsets stay caret offsets
+        .map(low).collect();
+        let mut i = 0;
+        while n > 0 && i + n <= chars.len() {
+            if chars[i..i + n] == pat[..] {
+                hits.push(Pos { para: pi, off: i });
+                i += n; // matches never overlap (Replace all depends on it)
+            } else {
+                i += 1;
+            }
+        }
+    }
+    hits
+}
+
+/// Select the next match of `needle` after the caret (wrapping). Returns (match number, total).
+pub fn find_next(s: &mut State, needle: &str) -> Option<(usize, usize)> {
+    if needle.is_empty() {
+        return None;
+    }
+    let n = needle.chars().count();
+    let hits = hits(s.ws.as_ref()?.page.doc.as_ref()?, needle);
+    if hits.is_empty() {
+        return Some((0, 0));
+    }
+    let after = s.dedit.ed.sel.ordered().1;
+    let k = hits.iter().position(|h| *h >= after && *h != s.dedit.ed.sel.ordered().0).unwrap_or(0);
+    let h = hits[k];
+    s.dedit.ed.sel = Sel { anchor: h, head: Pos { para: h.para, off: h.off + n } };
+    s.tool = Tool::TextBox;
+    scroll_to_caret(s);
+    s.dirty |= dirty::CANVAS | dirty::TOOLS;
+    Some((k + 1, hits.len()))
+}
+
+/// Replace every match of `find` (case-insensitive) in the text with `with`. Returns the count.
+pub fn replace_all(s: &mut State, find: &str, with: &str) -> usize {
+    if find.is_empty() {
+        return 0;
+    }
+    let n = find.chars().count();
+    let Some(found) = s.ws.as_ref().and_then(|w| w.page.doc.as_ref()).map(|d| hits(d, find)) else { return 0 };
+    if found.is_empty() {
+        return 0;
+    }
+    snapshot(s, "");
+    if let Some((doc, ed)) = doc_mut(s) {
+        // from the last match to the first, so earlier offsets stay valid
+        for h in found.iter().rev() {
+            let end = Pos { para: h.para, off: h.off + n };
+            let style = notedoc::style_at(doc, Pos { para: h.para, off: h.off + 1 });
+            notedoc::insert_text(doc, Sel { anchor: *h, head: end }, with, style);
+        }
+        ed.sel = Sel::caret(notedoc::clamp(doc, found[0]));
+    }
+    after_edit(s);
+    found.len()
+}
+
+
+/// Record ink edits made since the last check (they all happened after the last text edit).
+pub fn note_ink(s: &mut State) {
+    let ops = s.doc.ops;
+    let ed = &mut s.dedit.ed;
+    if ops < ed.ink_seen {
+        ed.ink_seen = ops; // a new page was loaded
+    }
+    if ops > ed.ink_seen {
+        for _ in 0..(ops - ed.ink_seen).min(400) {
+            ed.order.push(Layer::Ink);
+        }
+        ed.redo_order.clear();
+        ed.ink_seen = ops;
+        if ed.order.len() > 800 {
+            ed.order.drain(..ed.order.len() - 800);
+        }
+    }
+}
+
+/// Ctrl+Z: undo whichever of text or ink changed last. Returns false when the ink should be undone.
+pub fn undo_latest(s: &mut State) -> bool {
+    note_ink(s);
+    match s.dedit.ed.order.pop() {
+        Some(Layer::Doc) | None if undo(s) => {
+            s.dedit.ed.redo_order.push(Layer::Doc);
+            true
+        }
+        _ => {
+            s.dedit.ed.redo_order.push(Layer::Ink);
+            false
+        }
+    }
+}
+
+/// Ctrl+Y: redo in the opposite order. Returns false when the ink should be redone.
+pub fn redo_latest(s: &mut State) -> bool {
+    note_ink(s);
+    match s.dedit.ed.redo_order.pop() {
+        Some(Layer::Doc) | None if redo(s) => {
+            s.dedit.ed.order.push(Layer::Doc);
+            true
+        }
+        _ => {
+            s.dedit.ed.order.push(Layer::Ink);
+            false
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn find_is_case_insensitive_and_matches_do_not_overlap() {
+        let d = Doc::from_markup("Aaa aa\n\nbaa $x$ AA");
+        let h = hits(&d, "aa");
+        assert_eq!(h, vec![Pos { para: 0, off: 0 }, Pos { para: 0, off: 4 }, Pos { para: 1, off: 1 }, Pos { para: 1, off: 6 }]);
+        assert!(hits(&d, "").is_empty());
+        // characters whose lower case is longer do not shift the offsets
+        let u = Doc::from_markup("İx x");
+        assert_eq!(hits(&u, "x"), vec![Pos { para: 0, off: 1 }, Pos { para: 0, off: 3 }]);
+    }
 }
