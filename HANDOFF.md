@@ -6,8 +6,8 @@ supersedes it where they disagree.
 
 ## State right now
 
-- Everything is committed locally on `main` (commit "WIP: UI overhaul, security fixes, export/store
-  fixes"). **Nothing is pushed: the GitHub repo does not exist yet.** Creating the public repo
+- Everything is pushed to GitHub `main` (originally committed as "WIP: UI overhaul, security fixes, export/store
+  fixes"). The repo now exists and is pushed (see "Next session" below). Creating the public repo
   (`gh repo create legendarylolo318-cloud/scrawl --public --source . --push`) was blocked by the
   agent's permission system, so you need to run it yourself (or allow it).
 - Linux release build: OK. `scrawl --self-test`: PASSES.
@@ -83,11 +83,33 @@ remembered window size, tabs and last page.
 Files dropped on the window go through winit's `DroppedFile` (feature `unstable-winit-030`). This works on
 X11/Windows only. **winit has no Wayland DnD, so on Hyprland use paste or the file picker.**
 
-## Next session: start here
+## Next session: start here (updated 2026-11-10, end of day)
 
-1. Clippy (`-D warnings`) and all tests pass as of commit "Clippy clean".
-2. Create the repo and push: `gh repo create legendarylolo318-cloud/scrawl --public --source . --push`. CI (`ci.yml`) then shows Windows build errors.
-3. Click through the UI (item 3 below).
+Done since the first handoff: repo created and pushed (https://github.com/legendarylolo318-cloud/scrawl),
+clippy `-D warnings` clean, all tests pass locally, search filter bug fixed, SECURITY.md updated,
+release.yml names fixed, version 1.0.0. Local and remote `main` are in sync.
+
+Do these in order:
+
+1. **Read the first CI results.** `gh run list --limit 3`, then `gh run view <id> --log-failed`
+   for any failed run. Run `42785029618` is the first-ever CI run (Ubuntu + Windows).
+   Likely problems: missing apt packages for winit/arboard (`libxkbcommon-x11-dev`, `libxcb*`),
+   Windows-only compile errors, tests that assume Unix paths or a keyring, and `--self-test`
+   printing nothing on Windows (release builds use `windows_subsystem = "windows"`; CI can only
+   rely on the exit code). Fix, push, repeat until green.
+2. **Click through the UI** (see "Known broken" item 3): overlays, widths 1500/940/620/480, short
+   heights, `SCRAWL_SHOT_SCALE=2`, `SCRAWL_SHOT_THEME=light`. Fix layout bugs found.
+3. **MATLAB `for` loops** (item 6): implement in `crates/media/src/matlab.rs` or the `matlab`
+   screenshot scene stays broken.
+4. **Recognition** (item 7): a drawn "+" is ranked "±" first. Add an eval mode with shaky/tremor
+   noise to `scrawl-train`, measure top-1/top-5, retrain if top-5 < 97 %, update `metrics.json`.
+5. **`cargo audit` and `cargo deny check`**: both still unrun. Add a `deny.toml` (licences: MIT,
+   Apache-2.0, BSD, ISC, Zlib, Unicode, MPL-2.0, ODbL data note, Slint royalty-free licence).
+6. Performance numbers (item 9), README/CHANGELOG update with screenshots and numbers, Slint
+   licence attribution.
+7. **Release**: tag `v1.0.0` only when CI is green and audit/deny pass, `git push --tags`,
+   `gh run watch`, check the four artifact names plus SHA256SUMS, test the AppImage locally
+   (`--self-test` and a manual launch on Hyprland), then publish the draft release with notes.
 
 ## Known broken / not verified
 
