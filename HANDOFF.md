@@ -7,16 +7,24 @@ supersedes it where they disagree.
 ## State right now
 
 - Everything is pushed to GitHub `main` (originally committed as "WIP: UI overhaul, security fixes, export/store
-  fixes"). The repo now exists and is pushed (see "Next session" below). Creating the public repo
-  (`gh repo create legendarylolo318-cloud/scrawl --public --source . --push`) was blocked by the
-  agent's permission system, so you need to run it yourself (or allow it).
+  fixes"). The repo was created and pushed by you on 2026-11-10 (CI runs 42785029618 and 42785146887).
 - Linux release build: OK. `scrawl --self-test`: PASSES.
 - `cargo test --workspace --release`: all pass (the search bug below is fixed).
 - `cargo clippy --workspace --all-targets -- -D warnings`: clean.
-- `cargo audit` / `cargo deny`: installing them was started (`cargo install --locked cargo-audit cargo-deny`)
+- `cargo audit` (run 2026-11-10, both tools now installed): **fails**. Real advisories: `zip` 0.6.6
+  (RUSTSEC-2026-0367/0368/0369/0429: extraction symlink/SUID issues), `zstd-safe` 5.0.2 (several, incl.
+  RUSTSEC-2026-0403), `quick-xml` 0.38.4 via typst → hayagriva → citationberg (RUSTSEC-2026-0194/0195),
+  `crypto-bigint` 0.5.5 via age → p256 (RUSTSEC-2026-0387, timing), `rustybuzz`/`ttf-parser`
+  (RUSTSEC-2026-0206/0192), `zbus_names`/`zvariant` (RUSTSEC-2026-0370/0371/0372, D-Bus for rfd/keyring).
+  Unmaintained warnings: basic-toml, bincode, paste, pin-utils, unsafe-libyaml, yaml-rust.
+  `cargo tree -i zip@0.6.6 -e all --target all` prints nothing, so it is probably only the trainer
+  (burn) or a build tool: check with `cargo tree -i zip@0.6.6 -p scrawl-train`. Our own zip
+  extraction (backup restore) does not use `ZipArchive::extract` and checks `enclosed_name`.
+  Plan: `cargo update -p <crate>` where semver allows, otherwise bump the parent crate, otherwise add
+  documented ignores in `deny.toml`/`.cargo/audit.toml` with a reason. `cargo deny` not run yet.
+- OLD NOTE (superseded): installing them was started (`cargo install --locked cargo-audit cargo-deny`)
   but has not been checked, and neither has been run. There is no `deny.toml` yet.
-- Windows: **never built**. There is no Windows cross toolchain locally; it can only be checked in GitHub Actions
-  after the push.
+- Windows: first build is the CI runs above (results not read yet). No local Windows toolchain.
 
 ## Done in this session
 
