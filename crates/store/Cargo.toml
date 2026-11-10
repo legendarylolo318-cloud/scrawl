@@ -11,3 +11,4 @@ serde_json.workspace = true
 zip = "9.5.0"
 ink = { path = "../ink" }
 layout = { path = "../layout" }
+notedoc = { path = "../doc" }

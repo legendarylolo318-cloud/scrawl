@@ -77,6 +77,10 @@ pub struct Page {
     /// Ink mode the page opens in: "math", "text" or "drawing" (None = math).
     #[serde(default)]
     pub ink_mode: Option<String>,
+    /// The page as a document (paragraphs, styled text, objects). `None` for pages never opened in the
+    /// document editor; `blocks` is then the content. Once set, `blocks` is rebuilt from it on save.
+    #[serde(default)]
+    pub doc: Option<notedoc::Doc>,
     pub modified_ms: u64,
 }
 
@@ -98,6 +102,7 @@ impl Page {
             audio: None,
             texts: vec![],
             ink_mode: None,
+            doc: None,
             modified_ms: 0,
         }
     }

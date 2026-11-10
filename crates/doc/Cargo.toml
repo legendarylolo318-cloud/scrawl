@@ -1,0 +1,12 @@
+[package]
+name = "notedoc"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+layout = { path = "../layout" }
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

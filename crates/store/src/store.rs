@@ -102,6 +102,15 @@ impl Store {
     pub fn save_page(&self, nb: &str, page: &mut Page, vault: &Vault, now: u64) -> Result<()> {
         page.modified_ms = now;
         let base = self.page_base(nb, &page.id);
+        // first save of a page converted to a document: always keep the old blocks version in history
+        if page.doc.is_some() {
+            if let Ok(cur) = self.load_page(nb, &page.id, vault) {
+                if cur.doc.is_none() {
+                    let _ = self.snapshot_now(nb, &cur, vault, now.saturating_sub(1));
+                }
+            }
+            page.sync_blocks();
+        }
         // history snapshot of what is about to be replaced (throttled)
         self.maybe_snapshot(nb, &page.id, vault, now);
         write_json(&base, page, vault)?;
