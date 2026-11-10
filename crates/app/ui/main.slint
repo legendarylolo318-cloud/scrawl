@@ -65,6 +65,9 @@ export component MainWindow inherits Window {
     callback set-width(float);
     callback set-color(int);
     callback recognize-now();
+    callback pen-lifted();
+    callback set-delay(float);
+    in property <float> recog-delay: 600;
 
     VerticalLayout {
         Rectangle {
@@ -105,6 +108,11 @@ export component MainWindow inherits Window {
                 Slider {
                     width: 160px; minimum: 0.5; maximum: 24; value: root.stroke-width;
                     changed(v) => { root.set-width(v); }
+                }
+                Text { text: "Recognize after " + Math.round(root.recog-delay) + " ms"; color: Theme.text; vertical-alignment: center; }
+                Slider {
+                    width: 140px; minimum: 200; maximum: 2000; value: root.recog-delay;
+                    changed(v) => { root.set-delay(v); }
                 }
                 Text { text: root.status; color: Theme.accent; vertical-alignment: center; }
             }

@@ -48,7 +48,7 @@ impl Document {
 
     /// Convenience constructor for strokes with defaults.
     pub fn make_stroke(points: Vec<Point>, color: [u8; 4], width: f32, kind: PenKind, mode: InkMode) -> Stroke {
-        Stroke { id: 0, points, color, width, kind, mode }
+        Stroke { id: 0, points, color, width, kind, mode, t0_ms: 0 }
     }
 
     /// Delete strokes by id as one undoable edit. Returns how many were removed.

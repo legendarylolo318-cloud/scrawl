@@ -5,3 +5,7 @@ version.workspace = true
 license.workspace = true
 
 [dependencies]
+ink.workspace = true
+tiny-skia.workspace = true
+tract-onnx = "0.23"
+serde_json.workspace = true

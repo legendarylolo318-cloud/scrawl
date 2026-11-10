@@ -1,14 +1,18 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! Spatial layout of recognized symbols into an expression tree, plus Typst/LaTeX output.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub mod expr;
+pub mod latex;
+pub mod parse;
+pub mod typst;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
+pub use expr::*;
+pub use parse::{parse, Glyph};
+
+impl Expr {
+    pub fn to_typst(&self) -> String {
+        typst::ser(self)
+    }
+    pub fn to_latex(&self) -> String {
+        latex::ser(self)
     }
 }

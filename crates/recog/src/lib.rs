@@ -1,14 +1,18 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! Symbol recognition: stroke rasterization + CNN inference with tract.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+mod classifier;
+mod raster;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
+pub use classifier::{Candidate, Classifier, RecogError};
+pub use raster::{rasterize, Img, SIZE};
+
+/// Model and labels produced by `training/train.py` and committed under `model/`.
+pub const BUNDLED_MODEL: &[u8] = include_bytes!("../model/symbols.onnx");
+pub const BUNDLED_LABELS: &str = include_str!("../model/labels.json");
+
+impl Classifier {
+    /// The classifier shipped inside the binary.
+    pub fn bundled() -> Result<Self, RecogError> {
+        Self::from_bytes(BUNDLED_MODEL, BUNDLED_LABELS)
     }
 }

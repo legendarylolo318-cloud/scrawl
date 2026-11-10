@@ -5,3 +5,6 @@ version.workspace = true
 license.workspace = true
 
 [dependencies]
+layout = { path = "../layout" }
+serde.workspace = true
+serde_json.workspace = true

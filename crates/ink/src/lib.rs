@@ -3,12 +3,14 @@
 
 mod doc;
 mod geom;
+mod segment;
 mod scribble;
 mod smooth;
 
 pub use doc::{Document, EraserMode};
 pub use geom::{bbox, dist_point_segment, path_length, Rect};
 pub use scribble::is_scribble;
+pub use segment::{group_symbols, SegmentConfig};
 pub use smooth::{chaikin, smooth_stroke, OneEuro, SmoothingConfig};
 
 use serde::{Deserialize, Serialize};
@@ -56,6 +58,9 @@ pub struct Stroke {
     pub width: f32,
     pub kind: PenKind,
     pub mode: InkMode,
+    /// Absolute start time (ms, arbitrary epoch) used for temporal grouping.
+    #[serde(default)]
+    pub t0_ms: u64,
 }
 
 #[cfg(test)]

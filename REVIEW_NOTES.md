@@ -1,19 +1,43 @@
 # Review notes (work in progress)
 
-Status: **Phase 1 of 12 complete.** Phases 2–12 are not started; the other crates
-(`recog layout input render store search media export remote`) are empty stubs.
+Status: phases 1-2 complete; groundwork for phases 4-5 (`layout`, `input` crates) in place.
+Not started: phases 3 (UI half), 6-12. Crates `render store search media export remote` are stubs.
 
-## Phase 1 checklist (section 1: Ink canvas)
-- [x] Mouse capture, stroke smoothing (1€ filter + Chaikin, adjustable strength)
-- [x] Math/Text vs Drawing mode toggle (stored per stroke; no recognition yet)
-- [x] Pen, highlighter (drawn under ink), eraser (stroke + pixel modes)
-- [x] Zoom (Ctrl+scroll) and pan (scroll), stroke width, 6 preset colors
-- [x] Scribble-to-delete, undo/redo (toolbar buttons)
-- [ ] Ctrl+Z / Ctrl+Y shortcuts
-- [ ] Pen pressure/tilt: model carries them, but Slint's `TouchArea` does not expose
-      them; needs a platform-specific input path (winit tablet events or the remote client)
-- [ ] Auto-recognize delay slider, recognize-now (button is a stub)
-- [ ] Custom colors, 3 favorite pens, lasso, shape snapping, ruler
-- [ ] Whole-page re-rasterize on every pointer event (fine for now; needs caching later)
+## Recognition accuracy (HASYv2)
+Measured by `inkwell-train` after 30 epochs (see `crates/recog/model/metrics.json`):
 
-Everything in sections 2–9 is **missing**.
+| Test set | n | top-1 | top-5 |
+|---|---|---|---|
+| HASYv2 classification-task fold-1 test, restricted to our 191 classes | 11,593 | **90.5 %** | **99.5 %** |
+| Held-out synthetic samples of the 13 font-only classes | 780 | 99.9 % | 100 % |
+
+Caveats: the synthetic number is inflated (same generator as training, not real handwriting),
+so classes without HASYv2 data (`t = ( ) ≪ ≫ ∬ ∭ ∯ ″ ᵀ υ ς`) are the least trustworthy until
+personal samples (phase 3) exist. HASYv2 is single-stroke-rendered images, so accuracy on
+live drawn strokes (esp. multi-stroke) is unmeasured beyond a few hand-built smoke tests.
+Latency: 0.94 ms/symbol on CPU (budget 30 ms). Model: 2.85 MB (budget 5 MB).
+
+## Checklist
+### 1. Ink canvas
+- [x] mouse capture, smoothing (1€ + Chaikin), Math/Text vs Drawing mode, pen/highlighter/eraser
+- [x] zoom/pan, stroke width, scribble-delete, undo/redo buttons
+- [x] auto-recognize delay slider (200-2000 ms) + recognize-now (result shown as status text)
+- [ ] pressure/tilt: model has them but Slint `TouchArea` does not expose them
+- [ ] Ctrl+Z/Ctrl+Y shortcuts
+- [ ] whole page is re-rasterized per pointer event (needs caching)
+### 2. Recognition
+- [x] stroke grouping into symbols (`ink::group_symbols`, multi-stroke tested)
+- [x] CNN trained in **Rust (burn, wgpu: AMD/NVIDIA/Intel iGPU or CPU)**, exported to ONNX, run with tract
+- [x] HASYv2 (ODbL, attributed in training/README.md) + font-synthesized data with tremor augmentation
+- [ ] HASYv2 license/attribution in top-level README (README not written yet)
+- [ ] "Train my handwriting" + $P+ fusion; candidate strip UI (phase 3) - **missing**
+- [ ] function-name recognition from drawn letter sequences: done in `layout::parse` (sin, cos, ...), not wired to UI
+### 3. Layout / expression tree
+- [x] `Expr` tree, Typst + LaTeX serializers (tested)
+- [x] spatial parse: scripts, fractions, sqrt/nth root, sum/prod/integral bounds, function names
+- [ ] primes, limits above `lim`, matrices/cases/accents from ink, aligned-derivation UI, template toolbar - **missing**
+### 5. Typing
+- [x] `input::Editor`: cursor tree editor, shorthand (Greek, calculus, arrows, sets, RR..), `^ _ /`, sqrt/vec/hat/mat templates, Tab navigation, fuzzy autocomplete, user shorthand table
+- [ ] UI integration, source-toggle parsers (Typst/LaTeX -> tree), IME, selection/clipboard - **missing**
+### 4, 6-9 and the rest
+- missing (not started)

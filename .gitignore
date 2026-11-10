@@ -1,4 +1,4 @@
 target/
-*.onnx.tmp
 training/data/
-training/.venv/
+training/out/
+training/out_train.log

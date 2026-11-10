@@ -2,6 +2,7 @@ mod raster;
 
 use ink::{is_scribble, smooth_stroke, Document, EraserMode, InkMode, PenKind, Point, SmoothingConfig, Stroke};
 use raster::View;
+use recog::Classifier;
 use slint::ComponentHandle;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -38,6 +39,10 @@ struct State {
     live: Vec<Point>,
     eraser_path: Vec<(f32, f32)>,
     down_at: Option<Instant>,
+    t0_ms: u64,
+    epoch: Instant,
+    classifier: Option<Classifier>,
+    recog_delay_ms: u64,
 }
 
 impl State {
@@ -55,6 +60,10 @@ impl State {
             live: Vec::new(),
             eraser_path: Vec::new(),
             down_at: None,
+            t0_ms: 0,
+            epoch: Instant::now(),
+            classifier: None,
+            recog_delay_ms: 600,
         }
     }
 
@@ -72,8 +81,35 @@ impl State {
             width: self.width,
             kind: if self.tool == Tool::Highlighter { PenKind::Highlighter } else { PenKind::Pen },
             mode: self.mode,
+            t0_ms: self.t0_ms,
         }
     }
+}
+
+/// Group the Math/Text strokes into symbols and classify each; returns a status line.
+fn recognize(st: &mut State) -> String {
+    if st.classifier.is_none() {
+        match Classifier::bundled() {
+            Ok(c) => st.classifier = Some(c),
+            Err(e) => return format!("Recognizer failed to load: {e}"),
+        }
+    }
+    let strokes: Vec<&Stroke> = st.doc.strokes.iter().filter(|s| s.mode == InkMode::MathText && s.kind == PenKind::Pen).collect();
+    if strokes.is_empty() {
+        return "Nothing to recognize".into();
+    }
+    let owned: Vec<Stroke> = strokes.iter().map(|s| (*s).clone()).collect();
+    let groups = ink::group_symbols(&owned, ink::SegmentConfig::default());
+    let clf = st.classifier.as_ref().unwrap();
+    let mut parts = Vec::new();
+    for g in &groups {
+        let members: Vec<&Stroke> = g.iter().map(|&i| &owned[i]).collect();
+        if let Ok(c) = clf.classify(&members, 3) {
+            let top: Vec<String> = c.iter().map(|c| format!("{} {:.0}%", c.label, c.score * 100.0)).collect();
+            parts.push(top.join("/"));
+        }
+    }
+    parts.join("  |  ")
 }
 
 fn refresh(ui: &MainWindow, st: &State) {
@@ -122,6 +158,7 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.on_pointer_down(with!(|_ui, s, x = f32, y = f32| {
         let (px, py) = s.view.to_page(x, y);
         s.down_at = Some(Instant::now());
+        s.t0_ms = s.epoch.elapsed().as_millis() as u64;
         match s.tool {
             Tool::Eraser => s.eraser_path = vec![(px, py)],
             _ => s.live = vec![Point::new(px, py, 0)],
@@ -143,7 +180,7 @@ fn main() -> Result<(), slint::PlatformError> {
         }
     }));
 
-    ui.on_pointer_up(with!(|ui, s| {
+    let up_inner = with!(|ui, s| {
         if s.down_at.take().is_none() {
             return;
         }
@@ -171,7 +208,16 @@ fn main() -> Result<(), slint::PlatformError> {
                 }
             }
         }
-    }));
+    });
+    {
+        let w = weak.clone();
+        ui.on_pointer_up(move || {
+            up_inner();
+            if let Some(ui) = w.upgrade() {
+                ui.invoke_pen_lifted();
+            }
+        });
+    }
 
     ui.on_zoom(with!(|_ui, s, f = f32, x = f32, y = f32| s.view.zoom_at(f, x, y)));
     ui.on_pan(with!(|_ui, s, dx = f32, dy = f32| {
@@ -216,9 +262,29 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.on_set_color(with!(|_ui, s, i = i32| {
         s.color = (i as usize).min(PALETTE.len() - 1);
     }));
-    ui.on_recognize_now(with!(|ui, _s| {
-        ui.set_status("Recognition is not implemented yet (phase 2)".into());
+    ui.on_recognize_now(with!(|ui, s| {
+        ui.set_status(recognize(s).into());
     }));
+    ui.on_set_delay(with!(|ui, s, v = f32| {
+        s.recog_delay_ms = v as u64;
+        ui.set_recog_delay(v);
+    }));
+
+    // Auto-recognize: restart a single-shot timer on every pen-up.
+    let timer = Rc::new(slint::Timer::default());
+    {
+        let (st2, weak2, timer2) = (st.clone(), weak.clone(), timer.clone());
+        ui.on_pen_lifted(move || {
+            let (st3, weak3) = (st2.clone(), weak2.clone());
+            let delay = st2.borrow().recog_delay_ms;
+            timer2.start(slint::TimerMode::SingleShot, std::time::Duration::from_millis(delay), move || {
+                if let Some(ui) = weak3.upgrade() {
+                    let msg = recognize(&mut st3.borrow_mut());
+                    ui.set_status(msg.into());
+                }
+            });
+        });
+    }
 
     ui.run()
 }
