@@ -1,3 +1,4 @@
 fn main() {
-    slint_build::compile("ui/main.slint").expect("slint compile");
+    let cfg = slint_build::CompilerConfiguration::new().with_style("fluent-dark".into());
+    slint_build::compile_with_config("ui/main.slint", cfg).expect("slint compile");
 }

@@ -5,8 +5,9 @@ tablet, or an iPad/Android device; Scrawl recognizes each symbol and typesets it
 supported and mixes freely with drawing. Linux and Windows. No Chromium, no webview.
 
 > **Status: work in progress.** The core crates are implemented and tested, but the desktop UI does
-> not yet expose everything (notebooks sidebar, rich-text editing, tablet panel and more are library-level
-> only). [`REVIEW_NOTES.md`](REVIEW_NOTES.md) lists exactly what works, what is partial and what is missing.
+> not expose everything yet (rich-text editing, tags, lasso, tabs, a command palette and more are
+> missing or library-only). [`REVIEW_NOTES.md`](REVIEW_NOTES.md) lists exactly what works, what is partial
+> and what is missing. Builds and releases have not been tested on Windows yet.
 
 ## What works today
 
@@ -15,6 +16,14 @@ supported and mixes freely with drawing. Linux and Windows. No Chromium, no webv
   90.5 % top-1 / 99.5 % top-5 on the HASYv2 test split, under 1 ms per symbol on CPU, 2.9 MB model.
 - Candidate strip (keys 1-5), automatic personal training from corrections, "Train my handwriting" mode.
 - Expression tree -> Typst / LaTeX / Unicode; spatial parsing of scripts, fractions, roots, sums, integrals.
+- Notes: pages in a notebook with templates, autosave + crash recovery, full-text search, export to
+  PDF/PNG/Markdown/Typst/LaTeX/HTML.
+- **Graph view** (Desmos-style): type `y = a sin(x)`, `x^2 + y^2 = 4`, `y > x - 3`, `(cos(t), sin(t))`,
+  points and `a = 2`; parameters become sliders; zeros, extrema and intersections are listed.
+- **MATLAB**: run a script subset (`linspace`, `.*`, matrices, `plot`, `title`...) and import `.mat` data files,
+  all in Rust. No control flow, functions or toolboxes.
+- Typing mode (Type button): shorthand like `alpha`, `->`, `sqrt`, `mat3x3`, `a/b`, `x^2` with live Typst rendering.
+- Tablet panel: connect, pair by QR code, approve, revoke (see SECURITY.md).
 - Library crates: typing shorthand + autocomplete + template editor, storage (Typst + JSON, atomic, trash,
   history, backups, encryption), search, export (PDF/PNG/MD/Typst/LaTeX/HTML), plotter, PDF import,
   Opus audio, tablet server.

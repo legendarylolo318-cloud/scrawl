@@ -16,7 +16,7 @@ export = { path = "../export" }
 remote = { path = "../remote" }
 media = { path = "../media" }
 input = { path = "../input" }
-slint = "1.18"
+slint = { version = "1.18", features = ["software-renderer-systemfonts"] }
 
 [build-dependencies]
 slint-build = "1.18"

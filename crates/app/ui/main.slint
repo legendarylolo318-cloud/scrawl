@@ -1,4 +1,4 @@
-import { Slider } from "std-widgets.slint";
+import { Slider, TextEdit, LineEdit, ComboBox, ScrollView } from "std-widgets.slint";
 
 // Tokyo Night palette
 export global Theme {
@@ -7,20 +7,28 @@ export global Theme {
     out property <color> accent: #7aa2f7;
     out property <color> text: #c0caf5;
     out property <color> urgent: #f7768e;
+    out property <color> muted: #565f89;
 }
+
+export struct PageRow { id: string, title: string, detail: string, current: bool }
+export struct ParamRow { name: string, value: float, min: float, max: float }
+export struct LabelRow { x: length, y: length, text: string }
+export struct DeviceRow { id: string, name: string, detail: string }
 
 component ToolButton inherits Rectangle {
     in property <string> label;
     in property <bool> active: false;
     in property <bool> enabled: true;
+    in property <bool> urgent: false;
     callback clicked();
-    min-width: 40px;
+    min-width: max(40px, txt.preferred-width + 22px);
     min-height: 40px;
     border-radius: 6px;
-    background: !enabled ? transparent : active ? Theme.accent : ta.has-hover ? #2f354d : Theme.surface;
-    Text {
+    background: !enabled ? transparent : urgent ? Theme.urgent : active ? Theme.accent : ta.has-hover ? #2f354d : Theme.surface;
+    txt := Text {
         text: label;
-        color: !enabled ? #565f89 : active ? Theme.bg : Theme.text;
+        font-size: 13px;
+        color: !enabled ? Theme.muted : (active || urgent) ? Theme.bg : Theme.text;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -30,24 +38,84 @@ component ToolButton inherits Rectangle {
     }
 }
 
+// A toolbar row that scrolls horizontally instead of clipping when the window is narrow.
+component ScrollRow inherits Rectangle {
+    Flickable {
+        content-width: hl.preferred-width;
+        interactive: true;
+        hl := HorizontalLayout {
+            padding: 6px;
+            spacing: 6px;
+            @children
+        }
+    }
+}
+
 export component MainWindow inherits Window {
     title: "Scrawl";
-    min-width: 640px;
-    min-height: 420px;
-    preferred-width: 1100px;
-    preferred-height: 720px;
+    min-width: 480px;
+    min-height: 360px;
+    preferred-width: 1280px;
+    preferred-height: 780px;
     background: Theme.bg;
 
+    // ---- adaptive layout: panels shrink with the window, the sidebar hides when it is very narrow
+    // Tracked imperatively (a `changed` handler) so the layout does not depend on itself.
+    in-out property <length> win-w: 1280px;
+    init => { root.win-w = root.width; }
+    changed width => { root.win-w = root.width; }
+    property <bool> narrow: root.win-w < 1000px;
+    property <bool> tiny: root.win-w < 700px;
+    property <length> sidebar-w: root.narrow ? max(170px, root.win-w * 0.22) : 270px;
+    property <length> graph-panel-w: min(330px, max(220px, root.win-w * 0.36));
+    property <length> tablet-w: min(300px, max(220px, root.win-w * 0.34));
+    // ---- ink canvas
     in property <image> frame;
-    in property <string> tool: "pen";        // pen | highlighter | eraser
-    in property <string> mode: "math";       // math | drawing
+    in property <string> tool: "pen";
+    in property <string> mode: "math";
     in property <bool> pixel-erase: false;
     in property <bool> can-undo: false;
     in property <bool> can-redo: false;
     in property <float> smoothing: 0.5;
     in property <float> stroke-width: 3.0;
     in property <string> status: "";
-    in-out property <float> ui-scale: 1.0;
+    in property <float> recog-delay: 600;
+    in property <[string]> candidates;
+    in property <string> expr-text;
+    in property <image> expr-image;
+    in property <bool> has-expr-image: false;
+    in property <bool> training: false;
+    in property <string> train-label;
+    in property <string> train-info;
+    in property <string> paper-name: "Lined";
+    in property <float> paper-spacing: 32;
+    // ---- notes
+    in-out property <bool> show-sidebar: true;
+    in property <[PageRow]> pages;
+    in property <[PageRow]> search-results;
+    in property <bool> search-active: false;
+    in property <string> page-title;
+    in property <[string]> templates;
+    in property <[string]> export-formats;
+    // ---- typing
+    in property <bool> typing: false;
+    // ---- graph
+    in property <bool> graph-mode: false;
+    in property <image> graph-frame;
+    in property <[LabelRow]> graph-labels;
+    in property <[ParamRow]> graph-params;
+    in property <string> graph-info;
+    in property <string> graph-out;
+    in property <string> graph-default-text: "y = a sin(x)\na = 2";
+    // ---- tablet
+    in-out property <bool> show-tablet: false;
+    in property <bool> tablet-running: false;
+    in property <string> tablet-status;
+    in property <image> tablet-qr;
+    in property <bool> has-qr: false;
+    in property <string> tablet-fp;
+    in property <[DeviceRow]> tablet-pending;
+    in property <[DeviceRow]> tablet-devices;
 
     callback canvas-resized(length, length);
     callback pointer-down(length, length);
@@ -67,27 +135,53 @@ export component MainWindow inherits Window {
     callback recognize-now();
     callback pen-lifted();
     callback set-delay(float);
-    in property <float> recog-delay: 600;
-    in property <[string]> candidates;
-    in property <string> expr-text;
-    in property <bool> training: false;
-    in property <string> train-label;
-    in property <string> train-info;
     callback choose(int);
     callback cycle-paper();
     callback set-spacing(float);
-    in property <string> paper-name: "Lined";
-    in property <float> paper-spacing: 32;
     callback toggle-training();
     callback train-step(int);
     callback train-unfilled();
+    callback open-page(string);
+    callback new-page(string);
+    callback delete-page();
+    callback do-search(string);
+    callback rename-page(string);
+    callback export-page(string);
+    callback toggle-typing();
+    callback type-text(string);
+    callback type-nav(string);
+    callback toggle-graph();
+    callback graph-text-edited(string);
+    callback graph-set-param(string, float);
+    callback graph-pointer(int, length, length);
+    callback graph-zoom(float, length, length);
+    callback graph-resized(length, length);
+    callback graph-run-matlab(string);
+    callback graph-load-mat(string);
+    callback tablet-toggle();
+    callback tablet-setup();
+    callback tablet-new-pair();
+    callback tablet-approve(string);
+    callback tablet-reject(string);
+    callback tablet-revoke(string);
+    callback tablet-revoke-all();
 
     FocusScope {
         init => { self.focus(); }
         key-pressed(e) => {
+            if root.typing {
+                if e.text == Key.Backspace { root.type-nav("backspace"); return accept; }
+                if e.text == Key.Tab { root.type-nav("tab"); return accept; }
+                if e.text == Key.Backtab { root.type-nav("shift_tab"); return accept; }
+                if e.text == Key.LeftArrow { root.type-nav("left"); return accept; }
+                if e.text == Key.RightArrow { root.type-nav("right"); return accept; }
+                if e.text == Key.Return { root.type-nav("enter"); return accept; }
+                if e.text == Key.Escape { root.toggle-typing(); return accept; }
+                if !e.modifiers.control && !e.modifiers.alt && !e.modifiers.meta && e.text.character-count == 1 { root.type-text(e.text); return accept; }
+            }
             if e.modifiers.control && e.text == "z" { root.undo(); root.pen-lifted(); return accept; }
             if e.modifiers.control && e.text == "y" { root.redo(); root.pen-lifted(); return accept; }
-            if !e.modifiers.control && !e.modifiers.alt && !e.modifiers.meta {
+            if !root.typing && !e.modifiers.control && !e.modifiers.alt && !e.modifiers.meta {
                 if e.text == "1" { root.choose(0); return accept; }
                 if e.text == "2" { root.choose(1); return accept; }
                 if e.text == "3" { root.choose(2); return accept; }
@@ -96,113 +190,261 @@ export component MainWindow inherits Window {
             }
             reject
         }
-    VerticalLayout {
-        Rectangle {
-            background: Theme.surface;
-            height: 56px;
-            HorizontalLayout {
-                padding: 8px;
-                spacing: 6px;
-                ToolButton { label: "Pen"; active: root.tool == "pen"; clicked => { root.set-tool("pen"); } }
-                ToolButton { label: "Highlight"; active: root.tool == "highlighter"; clicked => { root.set-tool("highlighter"); } }
-                ToolButton { label: "Eraser"; active: root.tool == "eraser"; clicked => { root.set-tool("eraser"); } }
-                ToolButton { label: root.pixel-erase ? "Pixel" : "Stroke"; clicked => { root.toggle-pixel-erase(); } }
-                Rectangle { width: 12px; }
-                ToolButton { label: "Math/Text"; active: root.mode == "math"; clicked => { root.set-mode("math"); } }
-                ToolButton { label: "Drawing"; active: root.mode == "drawing"; clicked => { root.set-mode("drawing"); } }
-                Rectangle { width: 12px; }
-                ToolButton { label: "Undo"; enabled: root.can-undo; clicked => { root.undo(); root.pen-lifted(); } }
-                ToolButton { label: "Redo"; enabled: root.can-redo; clicked => { root.redo(); root.pen-lifted(); } }
-                ToolButton { label: "Clear"; clicked => { root.clear-all(); root.pen-lifted(); } }
-                ToolButton { label: "Recognize"; clicked => { root.recognize-now(); } }
-                ToolButton { label: "Paper: " + root.paper-name; clicked => { root.cycle-paper(); } }
-                ToolButton { label: "Train"; active: root.training; clicked => { root.toggle-training(); } }
-                for c[i] in [#c0caf5, #f7768e, #9ece6a, #7aa2f7, #e0af68, #bb9af7] : Rectangle {
-                    width: 40px; height: 40px; border-radius: 20px; background: c;
-                    TouchArea { clicked => { root.set-color(i); } }
+
+        VerticalLayout {
+            // ---- row 1: ink tools
+            Rectangle {
+                background: Theme.surface;
+                height: 56px;
+                ScrollRow {
+                    ToolButton { label: "Pen"; active: root.tool == "pen"; clicked => { root.set-tool("pen"); } }
+                    ToolButton { label: "Highlight"; active: root.tool == "highlighter"; clicked => { root.set-tool("highlighter"); } }
+                    ToolButton { label: "Eraser"; active: root.tool == "eraser"; clicked => { root.set-tool("eraser"); } }
+                    ToolButton { label: root.pixel-erase ? "Pixel" : "Stroke"; clicked => { root.toggle-pixel-erase(); } }
+                    Rectangle { width: 8px; }
+                    ToolButton { label: "Math/Text"; active: root.mode == "math"; clicked => { root.set-mode("math"); } }
+                    ToolButton { label: "Drawing"; active: root.mode == "drawing"; clicked => { root.set-mode("drawing"); } }
+                    Rectangle { width: 8px; }
+                    ToolButton { label: "Undo"; enabled: root.can-undo; clicked => { root.undo(); root.pen-lifted(); } }
+                    ToolButton { label: "Redo"; enabled: root.can-redo; clicked => { root.redo(); root.pen-lifted(); } }
+                    ToolButton { label: "Clear"; clicked => { root.clear-all(); root.pen-lifted(); } }
+                    ToolButton { label: "Recognize"; clicked => { root.recognize-now(); } }
+                    ToolButton { label: "Type"; active: root.typing; clicked => { root.toggle-typing(); } }
+                    ToolButton { label: "Train"; active: root.training; clicked => { root.toggle-training(); } }
+                    ToolButton { label: "Paper: " + root.paper-name; clicked => { root.cycle-paper(); } }
                 }
             }
-        }
-        Rectangle {
-            background: Theme.surface;
-            height: 44px;
-            HorizontalLayout {
-                padding-left: 12px; padding-right: 12px; spacing: 10px;
-                Text { text: "Smoothing " + Math.round(root.smoothing * 100) + "%"; color: Theme.text; vertical-alignment: center; }
-                Slider {
-                    width: 160px; minimum: 0; maximum: 1; value: root.smoothing;
-                    changed(v) => { root.set-smoothing(v); }
-                }
-                Text { text: "Width " + Math.round(root.stroke-width * 10) / 10; color: Theme.text; vertical-alignment: center; }
-                Slider {
-                    width: 160px; minimum: 0.5; maximum: 24; value: root.stroke-width;
-                    changed(v) => { root.set-width(v); }
-                }
-                Text { text: "Spacing " + Math.round(root.paper-spacing); color: Theme.text; vertical-alignment: center; }
-                Slider {
-                    width: 120px; minimum: 12; maximum: 96; value: root.paper-spacing;
-                    changed(v) => { root.set-spacing(v); }
-                }
-                Text { text: "Recognize after " + Math.round(root.recog-delay) + " ms"; color: Theme.text; vertical-alignment: center; }
-                Slider {
-                    width: 140px; minimum: 200; maximum: 2000; value: root.recog-delay;
-                    changed(v) => { root.set-delay(v); }
-                }
-                Text { text: root.status; color: Theme.accent; vertical-alignment: center; }
-            }
-        }
-        Rectangle {
-            background: #1f2335;
-            height: 60px;
-            HorizontalLayout {
-                padding: 6px; spacing: 6px;
-                if !root.training : HorizontalLayout {
-                    spacing: 6px;
-                    Text { text: "Candidates"; color: #565f89; vertical-alignment: center; }
-                    for c[i] in root.candidates : Rectangle {
-                        width: 72px; height: 48px; border-radius: 6px;
-                        background: cta.has-hover ? #2f354d : Theme.surface;
-                        Text { x: 6px; y: 4px; text: i + 1; color: #565f89; font-size: 11px; }
-                        Text { text: c; color: i == 0 ? Theme.accent : Theme.text; font-size: 26px; horizontal-alignment: center; vertical-alignment: center; }
-                        cta := TouchArea { clicked => { root.choose(i); } }
+            // ---- row 2: notes + modes
+            Rectangle {
+                background: #1f2335;
+                height: 52px;
+                ScrollRow {
+                    ToolButton { label: "Notes"; active: root.show-sidebar; clicked => { root.show-sidebar = !root.show-sidebar; } }
+                    page-title-edit := LineEdit {
+                        width: 220px;
+                        text: root.page-title;
+                        placeholder-text: "Page title";
+                        accepted(t) => { root.rename-page(t); }
                     }
-                    Text { text: root.expr-text; color: Theme.text; vertical-alignment: center; }
-                }
-                if root.training : HorizontalLayout {
-                    spacing: 8px;
-                    ToolButton { label: "<"; clicked => { root.train-step(-1); } }
-                    Text { text: root.train-label; color: Theme.accent; font-size: 30px; vertical-alignment: center; min-width: 48px; horizontal-alignment: center; }
-                    ToolButton { label: ">"; clicked => { root.train-step(1); } }
-                    ToolButton { label: "Next unfilled"; clicked => { root.train-unfilled(); } }
-                    Text { text: "Draw this symbol, then pause: " + root.train-info; color: Theme.text; vertical-alignment: center; }
+                    tmpl := ComboBox { width: 150px; model: root.templates; current-index: 1; }
+                    ToolButton { label: "+ Page"; clicked => { root.new-page(tmpl.current-value); } }
+                    ToolButton { label: "Delete"; clicked => { root.delete-page(); } }
+                    Rectangle { width: 8px; }
+                    exp := ComboBox { width: 120px; model: root.export-formats; current-index: 0; }
+                    ToolButton { label: "Export"; clicked => { root.export-page(exp.current-value); } }
+                    Rectangle { width: 8px; }
+                    ToolButton { label: "Graph"; active: root.graph-mode; clicked => { root.toggle-graph(); } }
+                    ToolButton { label: root.tablet-running ? "Tablet: ON" : "Tablet"; active: root.show-tablet; urgent: root.tablet-running; clicked => { root.show-tablet = !root.show-tablet; } }
                 }
             }
-        }
-        canvas := Rectangle {
-            background: Theme.bg;
-            clip: true;
-            changed width => { root.canvas-resized(self.width, self.height); }
-            changed height => { root.canvas-resized(self.width, self.height); }
-            Image { source: root.frame; width: parent.width; height: parent.height; image-fit: fill; }
-            ta := TouchArea {
-                pointer-event(e) => {
-                    if e.kind == PointerEventKind.down {
-                        if e.button == PointerEventButton.left { root.pointer-down(self.mouse-x, self.mouse-y); }
-                    } else if e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel {
-                        root.pointer-up();
+            // ---- row 3: sliders + status
+            Rectangle {
+                background: Theme.surface;
+                height: 44px;
+                ScrollRow {
+                    for c[i] in [#c0caf5, #f7768e, #9ece6a, #7aa2f7, #e0af68, #bb9af7] : Rectangle {
+                        width: 28px; height: 28px; border-radius: 14px; background: c; y: 8px;
+                        TouchArea { clicked => { root.set-color(i); } }
+                    }
+                    Text { text: "Smoothing " + Math.round(root.smoothing * 100) + "%"; color: Theme.text; vertical-alignment: center; }
+                    Slider { width: 90px; minimum: 0; maximum: 1; value: root.smoothing; changed(v) => { root.set-smoothing(v); } }
+                    Text { text: "Width " + Math.round(root.stroke-width * 10) / 10; color: Theme.text; vertical-alignment: center; }
+                    Slider { width: 90px; minimum: 0.5; maximum: 24; value: root.stroke-width; changed(v) => { root.set-width(v); } }
+                    Text { text: "Spacing " + Math.round(root.paper-spacing); color: Theme.text; vertical-alignment: center; }
+                    Slider { width: 80px; minimum: 12; maximum: 96; value: root.paper-spacing; changed(v) => { root.set-spacing(v); } }
+                    Text { text: "Recognize after " + Math.round(root.recog-delay) + " ms"; color: Theme.text; vertical-alignment: center; }
+                    Slider { width: 90px; minimum: 200; maximum: 2000; value: root.recog-delay; changed(v) => { root.set-delay(v); } }
+                    Text { text: root.status; color: Theme.accent; vertical-alignment: center; }
+                }
+            }
+            // ---- candidate strip / typing / training
+            Rectangle {
+                background: #1f2335;
+                height: 64px;
+                ScrollRow {
+                    if !root.training : HorizontalLayout {
+                        spacing: 6px;
+                        Text { text: root.typing ? "Typing (Esc to stop)" : "Candidates"; color: root.typing ? Theme.urgent : Theme.muted; vertical-alignment: center; }
+                        for c[i] in root.candidates : Rectangle {
+                            width: 72px; height: 48px; border-radius: 6px;
+                            background: cta.has-hover ? #2f354d : Theme.surface;
+                            Text { x: 6px; y: 4px; text: i + 1; color: Theme.muted; font-size: 11px; }
+                            Text { text: c; color: i == 0 ? Theme.accent : Theme.text; font-size: 26px; horizontal-alignment: center; vertical-alignment: center; }
+                            cta := TouchArea { clicked => { root.choose(i); } }
+                        }
+                        if root.has-expr-image : Image { source: root.expr-image; height: 48px; image-fit: contain; }
+                        Text { text: root.expr-text; color: Theme.text; vertical-alignment: center; }
+                    }
+                    if root.training : HorizontalLayout {
+                        spacing: 8px;
+                        ToolButton { label: "<"; clicked => { root.train-step(-1); } }
+                        Text { text: root.train-label; color: Theme.accent; font-size: 30px; vertical-alignment: center; min-width: 48px; horizontal-alignment: center; }
+                        ToolButton { label: ">"; clicked => { root.train-step(1); } }
+                        ToolButton { label: "Next unfilled"; clicked => { root.train-unfilled(); } }
+                        Text { text: "Draw this symbol, then pause: " + root.train-info; color: Theme.text; vertical-alignment: center; }
                     }
                 }
-                moved => { root.pointer-move(self.mouse-x, self.mouse-y); }
-                scroll-event(e) => {
-                    if e.modifiers.control {
-                        root.zoom(e.delta-y > 0 ? 1.1 : 1 / 1.1, self.mouse-x, self.mouse-y);
-                    } else {
-                        root.pan(e.delta-x, e.delta-y);
+            }
+            // ---- main area
+            HorizontalLayout {
+                // sidebar
+                if root.show-sidebar && !root.tiny && !(root.graph-mode && root.win-w < 1150px) : Rectangle {
+                    width: root.sidebar-w;
+                    background: #1f2335;
+                    VerticalLayout {
+                        padding: 8px; spacing: 6px;
+                        LineEdit {
+                            placeholder-text: "Search all pages";
+                            edited(t) => { root.do-search(t); }
+                        }
+                        Text { text: root.search-active ? "Search results" : "Pages"; color: Theme.muted; font-size: 12px; }
+                        ScrollView {
+                            VerticalLayout {
+                                spacing: 3px;
+                                for p in (root.search-active ? root.search-results : root.pages) : Rectangle {
+                                    height: p.detail == "" ? 38px : 58px;
+                                    border-radius: 6px;
+                                    background: p.current ? Theme.accent : pa.has-hover ? #2f354d : Theme.surface;
+                                    VerticalLayout {
+                                        padding-left: 10px; padding-right: 6px; padding-top: 4px;
+                                        Text { text: p.title; color: p.current ? Theme.bg : Theme.text; overflow: elide; }
+                                        if p.detail != "" : Text { text: p.detail; color: p.current ? Theme.bg : Theme.muted; font-size: 11px; wrap: word-wrap; overflow: elide; }
+                                    }
+                                    pa := TouchArea { clicked => { root.open-page(p.id); } }
+                                }
+                            }
+                        }
                     }
-                    accept
+                }
+                // content: ink canvas or graph
+                if !root.graph-mode : canvas := Rectangle {
+                    background: Theme.bg;
+                    clip: true;
+                    changed width => { root.canvas-resized(self.width, self.height); }
+                    changed height => { root.canvas-resized(self.width, self.height); }
+                    Image { source: root.frame; width: parent.width; height: parent.height; image-fit: fill; }
+                    TouchArea {
+                        pointer-event(e) => {
+                            if e.kind == PointerEventKind.down {
+                                if e.button == PointerEventButton.left { root.pointer-down(self.mouse-x, self.mouse-y); }
+                            } else if e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel {
+                                root.pointer-up();
+                            }
+                        }
+                        moved => { root.pointer-move(self.mouse-x, self.mouse-y); }
+                        scroll-event(e) => {
+                            if e.modifiers.control { root.zoom(e.delta-y > 0 ? 1.1 : 1 / 1.1, self.mouse-x, self.mouse-y); }
+                            else { root.pan(e.delta-x, e.delta-y); }
+                            accept
+                        }
+                    }
+                }
+                if root.graph-mode : HorizontalLayout {
+                    Rectangle {
+                        width: root.graph-panel-w;
+                        background: #1f2335;
+                        VerticalLayout {
+                            padding: 8px; spacing: 6px;
+                            Text { text: "Expressions (one per line)"; color: Theme.muted; font-size: 12px; }
+                            TextEdit {
+                                height: 150px;
+                                text: root.graph-default-text;
+                                font-size: 15px;
+                                edited(t) => { root.graph-text-edited(t); }
+                            }
+                            for p in root.graph-params : HorizontalLayout {
+                                spacing: 6px; height: 30px;
+                                Text { text: p.name + " = " + Math.round(p.value * 100) / 100; color: Theme.text; width: 86px; vertical-alignment: center; }
+                                Slider { minimum: p.min; maximum: p.max; value: p.value; changed(v) => { root.graph-set-param(p.name, v); } }
+                            }
+                            Text { text: root.graph-info; color: Theme.accent; font-size: 12px; wrap: word-wrap; }
+                            Text { text: "MATLAB script (linspace, plot, .*, ...)"; color: Theme.muted; font-size: 12px; }
+                            mscript := TextEdit {
+                                height: 110px;
+                                text: "x = linspace(0, 2*pi, 100);\ny = sin(x) .* exp(-x/4);\nplot(x, y); title('Damped sine')";
+                                font-size: 13px;
+                            }
+                            HorizontalLayout {
+                                spacing: 6px;
+                                ToolButton { label: "Run"; clicked => { root.graph-run-matlab(mscript.text); } }
+                                matpath := LineEdit { placeholder-text: "path/to/data.mat"; accepted(t) => { root.graph-load-mat(t); } }
+                                ToolButton { label: "Load .mat"; clicked => { root.graph-load-mat(matpath.text); } }
+                            }
+                            Text { text: root.graph-out; color: Theme.text; font-size: 12px; wrap: word-wrap; }
+                        }
+                    }
+                    Rectangle {
+                        background: Theme.bg;
+                        clip: true;
+                        changed width => { root.graph-resized(self.width, self.height); }
+                        changed height => { root.graph-resized(self.width, self.height); }
+                        Image { source: root.graph-frame; width: parent.width; height: parent.height; image-fit: fill; }
+                        for l in root.graph-labels : Text { x: l.x; y: l.y; text: l.text; color: #8a93b8; font-size: 11px; }
+                        TouchArea {
+                            pointer-event(e) => {
+                                if e.kind == PointerEventKind.down { root.graph-pointer(0, self.mouse-x, self.mouse-y); }
+                                else if e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel { root.graph-pointer(2, self.mouse-x, self.mouse-y); }
+                            }
+                            moved => { root.graph-pointer(1, self.mouse-x, self.mouse-y); }
+                            scroll-event(e) => { root.graph-zoom(e.delta-y > 0 ? 1.1 : 1 / 1.1, self.mouse-x, self.mouse-y); accept }
+                        }
+                    }
+                }
+                // tablet panel
+                if root.show-tablet : Rectangle {
+                    width: root.tablet-w;
+                    background: #1f2335;
+                    ScrollView {
+                        VerticalLayout {
+                            padding: 10px; spacing: 8px;
+                            Text { text: "Tablet as drawing tablet"; color: Theme.text; font-size: 16px; font-weight: 700; }
+                            if root.tablet-running : Rectangle {
+                                height: 44px; border-radius: 6px; background: Theme.urgent;
+                                HorizontalLayout {
+                                    padding: 6px; spacing: 6px;
+                                    Text { text: "Tablet server running"; color: Theme.bg; vertical-alignment: center; font-weight: 700; }
+                                    ToolButton { label: "Stop"; clicked => { root.tablet-toggle(); } }
+                                }
+                            }
+                            if !root.tablet-running : ToolButton { label: "Connect tablet"; clicked => { root.tablet-toggle(); } }
+                            Text { text: root.tablet-status; color: Theme.accent; wrap: word-wrap; font-size: 12px; }
+                            if root.tablet-running : HorizontalLayout {
+                                spacing: 6px;
+                                ToolButton { label: "Setup (install CA)"; clicked => { root.tablet-setup(); } }
+                                ToolButton { label: "Pair device"; clicked => { root.tablet-new-pair(); } }
+                            }
+                            if root.has-qr : Image { source: root.tablet-qr; width: min(260px, root.tablet-w - 30px); height: min(260px, root.tablet-w - 30px); image-fit: contain; }
+                            if root.tablet-fp != "" : Text { text: "CA fingerprint (compare on device):\n" + root.tablet-fp; color: Theme.text; font-size: 11px; wrap: word-wrap; }
+                            for d in root.tablet-pending : Rectangle {
+                                height: 90px; border-radius: 6px; background: Theme.surface;
+                                VerticalLayout {
+                                    padding: 8px; spacing: 4px;
+                                    Text { text: d.name + " wants to pair"; color: Theme.text; }
+                                    Text { text: "Code: " + d.detail; color: Theme.accent; font-size: 22px; font-weight: 700; }
+                                    HorizontalLayout {
+                                        spacing: 6px;
+                                        ToolButton { label: "Approve"; clicked => { root.tablet-approve(d.id); } }
+                                        ToolButton { label: "Reject"; clicked => { root.tablet-reject(d.id); } }
+                                    }
+                                }
+                            }
+                            Text { text: "Paired devices"; color: Theme.muted; font-size: 12px; }
+                            for d in root.tablet-devices : Rectangle {
+                                height: 56px; border-radius: 6px; background: Theme.surface;
+                                HorizontalLayout {
+                                    padding: 6px; spacing: 6px;
+                                    VerticalLayout {
+                                        Text { text: d.name; color: Theme.text; }
+                                        Text { text: d.detail; color: Theme.muted; font-size: 11px; }
+                                    }
+                                    ToolButton { label: "Revoke"; clicked => { root.tablet-revoke(d.id); } }
+                                }
+                            }
+                            if root.tablet-running : ToolButton { label: "Revoke all devices"; clicked => { root.tablet-revoke-all(); } }
+                        }
+                    }
                 }
             }
         }
-    }
     }
 }

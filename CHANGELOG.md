@@ -14,6 +14,8 @@
 - Search (tantivy), Typst rendering, export (PDF/PNG/Markdown/Typst/LaTeX/HTML).
 - Media: function plotter, image import, PDF import (pure Rust), Opus lecture audio.
 - Tablet server (HTTPS/WSS, TLS 1.3, name-constrained private CA, pairing) - off by default.
+- Desmos-style graph view and MATLAB (`.mat` import, `.m` script subset), all in Rust.
+- Notes sidebar with templates, autosave, search and export; typing mode; tablet panel.
 - `--self-test`, GitHub Actions release workflow (AppImage, Windows zip + installer, SHA256SUMS).
 
 See `REVIEW_NOTES.md` for what is not finished yet.
