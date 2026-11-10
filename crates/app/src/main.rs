@@ -2,7 +2,7 @@ mod raster;
 mod session;
 
 use ink::{is_scribble, smooth_stroke, Document, EraserMode, InkMode, PenKind, Point, SmoothingConfig, Stroke};
-use raster::View;
+use raster::{Paper, View};
 use session::Session;
 use slint::ComponentHandle;
 use std::cell::RefCell;
@@ -46,6 +46,7 @@ struct State {
     epoch: Instant,
     session: Session,
     recog_delay_ms: u64,
+    paper: Paper,
     training: bool,
     train_labels: Vec<String>,
     train_idx: usize,
@@ -70,6 +71,7 @@ impl State {
             epoch: Instant::now(),
             session: Session::new(session::config_dir().map(|d| d.join("personal.json"))),
             recog_delay_ms: 600,
+            paper: Paper::default(),
             training: false,
             train_labels: Vec::new(),
             train_idx: 0,
@@ -150,6 +152,7 @@ fn refresh(ui: &MainWindow, st: &State) {
         (h as f32 * scale) as u32,
         scale,
         [0x1a, 0x1b, 0x26],
+        st.paper,
     );
     ui.set_frame(img);
     ui.set_can_undo(st.doc.can_undo());
@@ -290,6 +293,14 @@ fn main() -> Result<(), slint::PlatformError> {
     }));
     ui.on_set_color(with!(|_ui, s, i = i32| {
         s.color = (i as usize).min(PALETTE.len() - 1);
+    }));
+    ui.on_cycle_paper(with!(|ui, s| {
+        s.paper.kind = s.paper.kind.next();
+        ui.set_paper_name(s.paper.kind.name().into());
+    }));
+    ui.on_set_spacing(with!(|ui, s, v = f32| {
+        s.paper.spacing = v;
+        ui.set_paper_spacing(v);
     }));
     ui.on_recognize_now(with!(|ui, s| run_recognition(&ui, s)));
     ui.on_choose(with!(|ui, s, i = i32| {

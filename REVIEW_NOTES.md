@@ -42,3 +42,9 @@ Latency: 0.94 ms/symbol on CPU (budget 30 ms). Model: 2.85 MB (budget 5 MB).
 - [ ] UI integration, source-toggle parsers (Typst/LaTeX -> tree), IME, selection/clipboard - **missing**
 ### 4, 6-9 and the rest
 - missing (not started)
+
+### 9. Pages and backgrounds (partial)
+- [x] backgrounds drawn under the ink and scrolling/zooming with it: blank, lined (with margin rule), grid, dot grid, engineering (major lines every 5), polar; adjustable spacing slider; "Paper" button cycles kinds
+- [ ] background colour picker, per-page persistence, fixed Letter/A4 page mode vs infinite canvas, page templates - **missing**
+- [ ] typed text lines on the page (rich-text blocks, phase 7) - **missing**
+- Known: the toolbar is one row and overflows narrow windows (min width 640 px)

@@ -74,6 +74,10 @@ export component MainWindow inherits Window {
     in property <string> train-label;
     in property <string> train-info;
     callback choose(int);
+    callback cycle-paper();
+    callback set-spacing(float);
+    in property <string> paper-name: "Lined";
+    in property <float> paper-spacing: 32;
     callback toggle-training();
     callback train-step(int);
     callback train-unfilled();
@@ -111,6 +115,7 @@ export component MainWindow inherits Window {
                 ToolButton { label: "Redo"; enabled: root.can-redo; clicked => { root.redo(); root.pen-lifted(); } }
                 ToolButton { label: "Clear"; clicked => { root.clear-all(); root.pen-lifted(); } }
                 ToolButton { label: "Recognize"; clicked => { root.recognize-now(); } }
+                ToolButton { label: "Paper: " + root.paper-name; clicked => { root.cycle-paper(); } }
                 ToolButton { label: "Train"; active: root.training; clicked => { root.toggle-training(); } }
                 for c[i] in [#c0caf5, #f7768e, #9ece6a, #7aa2f7, #e0af68, #bb9af7] : Rectangle {
                     width: 40px; height: 40px; border-radius: 20px; background: c;
@@ -132,6 +137,11 @@ export component MainWindow inherits Window {
                 Slider {
                     width: 160px; minimum: 0.5; maximum: 24; value: root.stroke-width;
                     changed(v) => { root.set-width(v); }
+                }
+                Text { text: "Spacing " + Math.round(root.paper-spacing); color: Theme.text; vertical-alignment: center; }
+                Slider {
+                    width: 120px; minimum: 12; maximum: 96; value: root.paper-spacing;
+                    changed(v) => { root.set-spacing(v); }
                 }
                 Text { text: "Recognize after " + Math.round(root.recog-delay) + " ms"; color: Theme.text; vertical-alignment: center; }
                 Slider {
