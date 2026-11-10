@@ -23,14 +23,15 @@ Latency: 0.94 ms/symbol on CPU (budget 30 ms). Model: 2.85 MB (budget 5 MB).
 - [x] zoom/pan, stroke width, scribble-delete, undo/redo buttons
 - [x] auto-recognize delay slider (200-2000 ms) + recognize-now (result shown as status text)
 - [ ] pressure/tilt: model has them but Slint `TouchArea` does not expose them
-- [ ] Ctrl+Z/Ctrl+Y shortcuts
+- [x] Ctrl+Z / Ctrl+Y shortcuts (rebindable shortcuts screen is missing)
 - [ ] whole page is re-rasterized per pointer event (needs caching)
 ### 2. Recognition
 - [x] stroke grouping into symbols (`ink::group_symbols`, multi-stroke tested)
 - [x] CNN trained in **Rust (burn, wgpu: AMD/NVIDIA/Intel iGPU or CPU)**, exported to ONNX, run with tract
 - [x] HASYv2 (ODbL, attributed in training/README.md) + font-synthesized data with tremor augmentation
 - [ ] HASYv2 license/attribution in top-level README (README not written yet)
-- [ ] "Train my handwriting" + $P+ fusion; candidate strip UI (phase 3) - **missing**
+- [x] $P+ personal recognizer fused with CNN (>=3 samples = priority), corrections auto-saved to `~/.config/inkwell/personal.json` (atomic write), "Train" mode, candidate strip with 1-5 keys + click (tested headlessly in `app::session`)
+- [ ] candidate strip shows unicode glyphs in a Slint `Text`, not Typst-rendered (needs phase 6 renderer)
 - [ ] function-name recognition from drawn letter sequences: done in `layout::parse` (sin, cos, ...), not wired to UI
 ### 3. Layout / expression tree
 - [x] `Expr` tree, Typst + LaTeX serializers (tested)

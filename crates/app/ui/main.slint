@@ -68,7 +68,30 @@ export component MainWindow inherits Window {
     callback pen-lifted();
     callback set-delay(float);
     in property <float> recog-delay: 600;
+    in property <[string]> candidates;
+    in property <string> expr-text;
+    in property <bool> training: false;
+    in property <string> train-label;
+    in property <string> train-info;
+    callback choose(int);
+    callback toggle-training();
+    callback train-step(int);
+    callback train-unfilled();
 
+    FocusScope {
+        init => { self.focus(); }
+        key-pressed(e) => {
+            if e.modifiers.control && e.text == "z" { root.undo(); root.pen-lifted(); return accept; }
+            if e.modifiers.control && e.text == "y" { root.redo(); root.pen-lifted(); return accept; }
+            if !e.modifiers.control && !e.modifiers.alt && !e.modifiers.meta {
+                if e.text == "1" { root.choose(0); return accept; }
+                if e.text == "2" { root.choose(1); return accept; }
+                if e.text == "3" { root.choose(2); return accept; }
+                if e.text == "4" { root.choose(3); return accept; }
+                if e.text == "5" { root.choose(4); return accept; }
+            }
+            reject
+        }
     VerticalLayout {
         Rectangle {
             background: Theme.surface;
@@ -84,10 +107,11 @@ export component MainWindow inherits Window {
                 ToolButton { label: "Math/Text"; active: root.mode == "math"; clicked => { root.set-mode("math"); } }
                 ToolButton { label: "Drawing"; active: root.mode == "drawing"; clicked => { root.set-mode("drawing"); } }
                 Rectangle { width: 12px; }
-                ToolButton { label: "Undo"; enabled: root.can-undo; clicked => { root.undo(); } }
-                ToolButton { label: "Redo"; enabled: root.can-redo; clicked => { root.redo(); } }
-                ToolButton { label: "Clear"; clicked => { root.clear-all(); } }
+                ToolButton { label: "Undo"; enabled: root.can-undo; clicked => { root.undo(); root.pen-lifted(); } }
+                ToolButton { label: "Redo"; enabled: root.can-redo; clicked => { root.redo(); root.pen-lifted(); } }
+                ToolButton { label: "Clear"; clicked => { root.clear-all(); root.pen-lifted(); } }
                 ToolButton { label: "Recognize"; clicked => { root.recognize-now(); } }
+                ToolButton { label: "Train"; active: root.training; clicked => { root.toggle-training(); } }
                 for c[i] in [#c0caf5, #f7768e, #9ece6a, #7aa2f7, #e0af68, #bb9af7] : Rectangle {
                     width: 40px; height: 40px; border-radius: 20px; background: c;
                     TouchArea { clicked => { root.set-color(i); } }
@@ -117,6 +141,33 @@ export component MainWindow inherits Window {
                 Text { text: root.status; color: Theme.accent; vertical-alignment: center; }
             }
         }
+        Rectangle {
+            background: #1f2335;
+            height: 60px;
+            HorizontalLayout {
+                padding: 6px; spacing: 6px;
+                if !root.training : HorizontalLayout {
+                    spacing: 6px;
+                    Text { text: "Candidates"; color: #565f89; vertical-alignment: center; }
+                    for c[i] in root.candidates : Rectangle {
+                        width: 72px; height: 48px; border-radius: 6px;
+                        background: cta.has-hover ? #2f354d : Theme.surface;
+                        Text { x: 6px; y: 4px; text: i + 1; color: #565f89; font-size: 11px; }
+                        Text { text: c; color: i == 0 ? Theme.accent : Theme.text; font-size: 26px; horizontal-alignment: center; vertical-alignment: center; }
+                        cta := TouchArea { clicked => { root.choose(i); } }
+                    }
+                    Text { text: root.expr-text; color: Theme.text; vertical-alignment: center; }
+                }
+                if root.training : HorizontalLayout {
+                    spacing: 8px;
+                    ToolButton { label: "<"; clicked => { root.train-step(-1); } }
+                    Text { text: root.train-label; color: Theme.accent; font-size: 30px; vertical-alignment: center; min-width: 48px; horizontal-alignment: center; }
+                    ToolButton { label: ">"; clicked => { root.train-step(1); } }
+                    ToolButton { label: "Next unfilled"; clicked => { root.train-unfilled(); } }
+                    Text { text: "Draw this symbol, then pause: " + root.train-info; color: Theme.text; vertical-alignment: center; }
+                }
+            }
+        }
         canvas := Rectangle {
             background: Theme.bg;
             clip: true;
@@ -142,5 +193,6 @@ export component MainWindow inherits Window {
                 }
             }
         }
+    }
     }
 }

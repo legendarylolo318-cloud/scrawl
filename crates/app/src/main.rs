@@ -1,14 +1,17 @@
 mod raster;
+mod session;
 
 use ink::{is_scribble, smooth_stroke, Document, EraserMode, InkMode, PenKind, Point, SmoothingConfig, Stroke};
 use raster::View;
-use recog::Classifier;
+use session::Session;
 use slint::ComponentHandle;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Instant;
 
 slint::include_modules!();
+
+const PRIORITY: usize = recog::PRIORITY_MIN_SAMPLES;
 
 const PALETTE: [[u8; 3]; 6] = [
     [0xc0, 0xca, 0xf5],
@@ -41,8 +44,11 @@ struct State {
     down_at: Option<Instant>,
     t0_ms: u64,
     epoch: Instant,
-    classifier: Option<Classifier>,
+    session: Session,
     recog_delay_ms: u64,
+    training: bool,
+    train_labels: Vec<String>,
+    train_idx: usize,
 }
 
 impl State {
@@ -62,8 +68,11 @@ impl State {
             down_at: None,
             t0_ms: 0,
             epoch: Instant::now(),
-            classifier: None,
+            session: Session::new(session::config_dir().map(|d| d.join("personal.json"))),
             recog_delay_ms: 600,
+            training: false,
+            train_labels: Vec::new(),
+            train_idx: 0,
         }
     }
 
@@ -86,30 +95,48 @@ impl State {
     }
 }
 
-/// Group the Math/Text strokes into symbols and classify each; returns a status line.
-fn recognize(st: &mut State) -> String {
-    if st.classifier.is_none() {
-        match Classifier::bundled() {
-            Ok(c) => st.classifier = Some(c),
-            Err(e) => return format!("Recognizer failed to load: {e}"),
+fn update_training_ui(ui: &MainWindow, st: &mut State) {
+    if st.train_labels.is_empty() {
+        st.train_labels = st.session.labels();
+    }
+    let Some(label) = st.train_labels.get(st.train_idx).cloned() else { return };
+    let n = st.session.personal_count(&label);
+    ui.set_train_info(format!("{n} sample(s) saved, {PRIORITY}+ gives your handwriting priority").into());
+    ui.set_train_label(label.into());
+}
+
+fn update_strip(ui: &MainWindow, st: &State) {
+    let cands: Vec<slint::SharedString> = st
+        .session
+        .selected
+        .and_then(|i| st.session.symbols.get(i))
+        .map(|s| s.cands.iter().map(|c| slint::SharedString::from(c.label.as_str())).collect())
+        .unwrap_or_default();
+    ui.set_candidates(slint::ModelRc::new(slint::VecModel::from(cands)));
+    let e = st.session.expression();
+    ui.set_expr_text(if e.is_empty() { "".into() } else { format!("= {}", e.to_typst()).into() });
+}
+
+/// Auto/manual recognition. In training mode it stores the drawn symbols for the target label.
+fn run_recognition(ui: &MainWindow, st: &mut State) {
+    if st.training {
+        let Some(label) = st.train_labels.get(st.train_idx).cloned() else { return };
+        match st.session.train(&label, &st.doc.strokes) {
+            Ok(ids) if !ids.is_empty() => {
+                st.doc.remove_ids(&ids);
+                ui.set_status("Saved".into());
+            }
+            Ok(_) => {}
+            Err(e) => ui.set_status(e.into()),
         }
+        update_training_ui(ui, st);
+        return;
     }
-    let strokes: Vec<&Stroke> = st.doc.strokes.iter().filter(|s| s.mode == InkMode::MathText && s.kind == PenKind::Pen).collect();
-    if strokes.is_empty() {
-        return "Nothing to recognize".into();
+    match st.session.recognize(&st.doc.strokes) {
+        Ok(()) => ui.set_status(if st.session.symbols.is_empty() { "Nothing to recognize".into() } else { "".into() }),
+        Err(e) => ui.set_status(format!("Recognizer failed to load: {e}").into()),
     }
-    let owned: Vec<Stroke> = strokes.iter().map(|s| (*s).clone()).collect();
-    let groups = ink::group_symbols(&owned, ink::SegmentConfig::default());
-    let clf = st.classifier.as_ref().unwrap();
-    let mut parts = Vec::new();
-    for g in &groups {
-        let members: Vec<&Stroke> = g.iter().map(|&i| &owned[i]).collect();
-        if let Ok(c) = clf.classify(&members, 3) {
-            let top: Vec<String> = c.iter().map(|c| format!("{} {:.0}%", c.label, c.score * 100.0)).collect();
-            parts.push(top.join("/"));
-        }
-    }
-    parts.join("  |  ")
+    update_strip(ui, st);
 }
 
 fn refresh(ui: &MainWindow, st: &State) {
@@ -250,6 +277,8 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.on_clear_all(with!(|_ui, s| {
         let ids: Vec<u64> = s.doc.strokes.iter().map(|x| x.id).collect();
         s.doc.remove_ids(&ids); // undoable
+        s.session.symbols.clear();
+        s.session.selected = None;
     }));
     ui.on_set_smoothing(with!(|ui, s, v = f32| {
         s.smoothing = v;
@@ -262,8 +291,36 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.on_set_color(with!(|_ui, s, i = i32| {
         s.color = (i as usize).min(PALETTE.len() - 1);
     }));
-    ui.on_recognize_now(with!(|ui, s| {
-        ui.set_status(recognize(s).into());
+    ui.on_recognize_now(with!(|ui, s| run_recognition(&ui, s)));
+    ui.on_choose(with!(|ui, s, i = i32| {
+        if s.session.choose(i.max(0) as usize, &s.doc.strokes) {
+            update_strip(&ui, s);
+            ui.set_status("Correction saved to your handwriting profile".into());
+        }
+    }));
+    ui.on_toggle_training(with!(|ui, s| {
+        s.training = !s.training;
+        ui.set_training(s.training);
+        if s.training {
+            update_training_ui(&ui, s);
+        }
+    }));
+    ui.on_train_step(with!(|ui, s, d = i32| {
+        let n = s.train_labels.len().max(1) as i32;
+        s.train_idx = ((s.train_idx as i32 + d).rem_euclid(n)) as usize;
+        update_training_ui(&ui, s);
+    }));
+    ui.on_train_unfilled(with!(|ui, s| {
+        let n = s.train_labels.len();
+        for k in 1..=n {
+            let i = (s.train_idx + k) % n;
+            let l = s.train_labels[i].clone();
+            if s.session.personal_count(&l) < PRIORITY {
+                s.train_idx = i;
+                break;
+            }
+        }
+        update_training_ui(&ui, s);
     }));
     ui.on_set_delay(with!(|ui, s, v = f32| {
         s.recog_delay_ms = v as u64;
@@ -279,8 +336,7 @@ fn main() -> Result<(), slint::PlatformError> {
             let delay = st2.borrow().recog_delay_ms;
             timer2.start(slint::TimerMode::SingleShot, std::time::Duration::from_millis(delay), move || {
                 if let Some(ui) = weak3.upgrade() {
-                    let msg = recognize(&mut st3.borrow_mut());
-                    ui.set_status(msg.into());
+                    run_recognition(&ui, &mut st3.borrow_mut());
                 }
             });
         });

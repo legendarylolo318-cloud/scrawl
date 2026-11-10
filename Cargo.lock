@@ -5150,6 +5150,7 @@ name = "inkwell"
 version = "0.1.0"
 dependencies = [
  "ink",
+ "layout",
  "recog",
  "slint",
  "slint-build",
@@ -7966,6 +7967,7 @@ name = "recog"
 version = "0.1.0"
 dependencies = [
  "ink",
+ "serde",
  "serde_json",
  "tiny-skia 0.11.4",
  "tract-onnx",
