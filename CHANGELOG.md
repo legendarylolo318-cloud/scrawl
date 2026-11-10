@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.1 (2026-11-10): better handwriting-to-text
+
+### Changed
+- The dot of a handwritten i or j is joined to its stem instead of read as a separate full stop.
+- More letter guesses per symbol and a wider dictionary search when reading words.
+- Picking a different word on the suggestion chip teaches Scrawl the letters that changed.
+
 ## 1.1.0 (2026-11-10): one calm page for typing and handwriting
 
 ### Changed
@@ -26,11 +33,6 @@
 - Handwriting suggestions offer whole-word alternatives in Words mode, and an Auto mode tells words from math
   (As words / As math on the chip to override).
 - Find (Ctrl+F) and Replace (Ctrl+H) on the page.
-
-### Text recognition (after 1.1.0)
-- The dot of a handwritten i or j is joined to its stem instead of read as a separate full stop.
-- More letter guesses per symbol and a wider dictionary search when reading words.
-- Picking a different word on the suggestion chip teaches Scrawl the letters that changed.
 
 ### Fixed
 - Undo now undoes whatever changed last, text or ink.
