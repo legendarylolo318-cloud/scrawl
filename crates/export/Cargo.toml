@@ -5,3 +5,8 @@ version.workspace = true
 license.workspace = true
 
 [dependencies]
+store = { path = "../store" }
+layout = { path = "../layout" }
+render = { path = "../render" }
+ink = { path = "../ink" }
+zip = "9.5.0"
