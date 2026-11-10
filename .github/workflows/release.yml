@@ -6,7 +6,7 @@ permissions:
   contents: write
 env:
   CARGO_TERM_COLOR: always
-  VERSION: ${{ github.ref_name }}
+  TAG: ${{ github.ref_name }}
 
 jobs:
   linux:
@@ -28,13 +28,13 @@ jobs:
           curl -fsSL -o linuxdeploy https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20250213-2/linuxdeploy-x86_64.AppImage
           chmod +x linuxdeploy
           mkdir -p AppDir
-          VERSION="${VERSION#v}" ./linuxdeploy --appimage-extract-and-run --appdir AppDir \
+          VERSION="${TAG#v}" ./linuxdeploy --appimage-extract-and-run --appdir AppDir \
             --executable target/release/scrawl \
             --desktop-file packaging/scrawl.desktop \
             --icon-file packaging/scrawl.png --icon-filename scrawl \
             --output appimage
           mkdir -p dist
-          mv Scrawl-*.AppImage "dist/Scrawl-${VERSION}-x86_64.AppImage"
+          mv Scrawl-*.AppImage "dist/Scrawl-${TAG#v}-x86_64.AppImage"
       - name: Self-test the AppImage
         run: |
           chmod +x dist/*.AppImage
@@ -61,11 +61,11 @@ jobs:
         run: |
           ./dist/scrawl.exe --self-test
           if ($LASTEXITCODE -ne 0) { throw "self-test failed" }
-      - name: Portable zip
+      - name: Portable exe
         shell: pwsh
         run: |
           $v = "${{ github.ref_name }}".TrimStart("v")
-          Compress-Archive -Path dist/scrawl.exe, LICENSE, README.md -DestinationPath "dist/Scrawl-$v-windows-x86_64-portable.zip"
+          Copy-Item dist/scrawl.exe "dist/Scrawl-$v-windows-x64.exe"
       - name: Installer (Inno Setup)
         shell: pwsh
         run: |
@@ -83,7 +83,7 @@ jobs:
         with:
           name: windows
           path: |
-            dist/*.zip
+            dist/Scrawl-*-windows-x64.exe
             dist/*-setup.exe
 
   release:

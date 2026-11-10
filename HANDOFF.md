@@ -83,7 +83,13 @@ remembered window size, tabs and last page.
 Files dropped on the window go through winit's `DroppedFile` (feature `unstable-winit-030`). This works on
 X11/Windows only. **winit has no Wayland DnD, so on Hyprland use paste or the file picker.**
 
-## Known broken / not verified (do these first)
+## Next session: start here
+
+1. Fix the failing search test (item 1 below), then run clippy and fix the lints.
+2. Create the repo and push: `gh repo create legendarylolo318-cloud/scrawl --public --source . --push`. CI (`ci.yml`) then shows Windows build errors.
+3. Click through the UI (item 3 below).
+
+## Known broken / not verified
 
 1. **Failing test** `workspace::tests::pages_templates_switching_trash_restore_and_search`:
    `search("eigenvalues")` returns 2 hits instead of 1. Suspect: the persisted index adds the page in
@@ -113,14 +119,14 @@ X11/Windows only. **winit has no Wayland DnD, so on Hyprland use paste or the fi
 
 ## Release work still to do
 
-- `.github/workflows/release.yml`: `VERSION` is `v1.0.0`, so file names come out `Scrawl-v1.0.0-...`.
+- DONE (untested): `release.yml` now strips the `v` from the tag and produces `Scrawl-1.0.0-x86_64.AppImage`, `Scrawl-1.0.0-windows-x64.exe` (portable) and `Scrawl-1.0.0-windows-x64-setup.exe` (Inno `OutputBaseFilename` updated); workspace version bumped to 1.0.0. Nothing has run in Actions yet. Original note:
   Strip the `v`. Required names: `Scrawl-1.0.0-x86_64.AppImage`, `Scrawl-1.0.0-windows-x64.exe` (portable,
   replaces the zip), `Scrawl-1.0.0-windows-x64-setup.exe`, `SHA256SUMS`. Check `packaging/scrawl.iss`
   output name. CI on Ubuntu also needs the new deps: `libxkbcommon-x11-dev libxcb*` (arboard/winit),
   and possibly `libgtk-3-dev` is NOT needed (rfd uses xdg-portal). The Windows build now has
   `windows_subsystem = "windows"` in release builds: `--self-test` prints nothing to a console there,
   so CI must rely on the exit code (or attach a console when `--self-test` is passed).
-- Bump `version` in `Cargo.toml` to 1.0.0. Update README (features, screenshots, numbers), CHANGELOG
+- Update README (features, screenshots, numbers), CHANGELOG
   and SECURITY.md (add SCOWL dictionary attribution: `crates/app/dict/LICENSE-SCOWL.txt`).
 - Check Slint's licence terms (royalty-free licence requires attribution in the app/README).
 - Push, tag `v1.0.0` only after tests + clippy + audit + deny pass, then `gh run watch`, fix and re-tag
