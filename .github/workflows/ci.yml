@@ -1,0 +1,19 @@
+name: ci
+on: [push, pull_request]
+env:
+  CARGO_TERM_COLOR: always
+jobs:
+  test:
+    strategy:
+      matrix: { os: [ubuntu-22.04, windows-latest] }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: clippy }
+      - uses: Swatinem/rust-cache@v2
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libfontconfig1-dev libxkbcommon-dev libwayland-dev libdbus-1-dev pkg-config
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace --release
+      - run: cargo run --release -p inkwell -- --self-test

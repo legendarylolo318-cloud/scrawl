@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Inkwell
+Comment=Handwritten math notes
+Exec=inkwell
+Icon=inkwell
+Categories=Education;Office;Science;
+Terminal=false
