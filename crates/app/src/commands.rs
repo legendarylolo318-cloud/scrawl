@@ -104,6 +104,24 @@ cmds! {
     "print", "Print", "ctrl+shift+o", "Export";
     "backup", "Back up now", "", "Data";
     "restore-backup", "Restore from a backup", "", "Data";
+    "fmt-body", "Text: normal paragraph", "", "Text";
+    "fmt-h1", "Text: heading 1", "", "Text";
+    "fmt-h2", "Text: heading 2", "", "Text";
+    "fmt-h3", "Text: heading 3", "", "Text";
+    "fmt-bullet", "Text: bullet list", "", "Text";
+    "fmt-numbered", "Text: numbered list", "", "Text";
+    "fmt-check", "Text: checklist", "", "Text";
+    "fmt-quote", "Text: quote", "", "Text";
+    "fmt-bold", "Text: bold (Ctrl+B)", "", "Text";
+    "fmt-italic", "Text: italic (Ctrl+I)", "", "Text";
+    "fmt-underline", "Text: underline (Ctrl+U)", "", "Text";
+    "fmt-code", "Text: code", "", "Text";
+    "fmt-indent", "Text: indent list item (Tab)", "", "Text";
+    "fmt-outdent", "Text: outdent list item (Shift+Tab)", "", "Text";
+    "fmt-math", "Insert inline math", "", "Text";
+    "fmt-link", "Link text to a page or web address", "", "Text";
+    "insert-table", "Insert a table", "", "Page";
+    "chip-dismiss", "Keep handwriting as ink (dismiss the suggestion)", "", "Ink";
     "tablet", "Tablet panel", "", "Tablet";
 }
 

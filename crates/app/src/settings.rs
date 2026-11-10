@@ -108,7 +108,7 @@ impl Default for Settings {
             tabs: vec![],
             show_doc: true,
             show_sidebar: true,
-            new_editor: false,
+            new_editor: true,
             tablet_idle_min: 15,
         }
     }

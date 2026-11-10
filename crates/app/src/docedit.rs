@@ -60,6 +60,8 @@ impl Objects for AppObjects {
 
 pub struct DocEdit {
     pub ed: EditState,
+    /// Left edge of the text column in page units (the column is centred in wide windows).
+    pub x0: f32,
     pub fonts: Option<Fonts>,
     pub layout: Layout,
     pub objs: AppObjects,
@@ -68,7 +70,7 @@ pub struct DocEdit {
 
 impl DocEdit {
     pub fn new(math: Arc<render::MathCache>) -> Self {
-        Self { ed: EditState::default(), fonts: None, layout: Layout::new(), objs: AppObjects { math, blocks: Default::default(), media: vec![] }, cache: HashMap::new() }
+        Self { ed: EditState::default(), x0: MARGIN_X, fonts: None, layout: Layout::new(), objs: AppObjects { math, blocks: Default::default(), media: vec![] }, cache: HashMap::new() }
     }
 
     /// Column width in page units for a canvas `canvas_w` logical px wide at zoom `zoom`.
@@ -76,7 +78,8 @@ impl DocEdit {
         ((canvas_w / zoom.max(0.1)) - 2.0 * MARGIN_X).clamp(200.0, 840.0)
     }
 
-    pub fn relayout(&mut self, doc: &Doc, col_w: f32) {
+    pub fn relayout(&mut self, doc: &Doc, col_w: f32, canvas_w: f32, zoom: f32) {
+        self.x0 = ((canvas_w / zoom.max(0.1) - col_w) / 2.0).max(MARGIN_X);
         let fonts = self.fonts.get_or_insert_with(Fonts::bundled);
         self.layout.update(fonts, doc, col_w, &mut self.objs);
     }
@@ -102,7 +105,7 @@ impl DocEdit {
                 }
             }
             if let Some(pm) = self.cache.get(&key) {
-                out.push((MARGIN_X, top, pm.clone()));
+                out.push((self.x0, top, pm.clone()));
             }
         }
         out
@@ -150,7 +153,7 @@ fn column(s: &State) -> f32 {
 pub fn relayout(s: &mut State) {
     let col = column(s);
     if let Some(doc) = s.ws.as_ref().and_then(|w| w.page.doc.as_ref()) {
-        s.dedit.relayout(doc, col);
+        s.dedit.relayout(doc, col, s.size.0 as f32, s.view.scale);
     }
 }
 
@@ -438,7 +441,7 @@ pub fn redo(s: &mut State) -> bool {
 
 fn doc_point(s: &State, x: f32, y: f32) -> (f32, f32) {
     let (px, py) = s.view.to_page(x, y);
-    (px - MARGIN_X, py - MARGIN_Y)
+    (px - s.dedit.x0, py - MARGIN_Y)
 }
 
 /// Returns true when the click belongs to the document editor.
@@ -509,11 +512,241 @@ pub fn overlay_geometry(s: &State) -> (Rects, Option<(f32, f32, f32)>) {
         return (vec![], None);
     }
     let sel = s.dedit.ed.sel;
-    let rects = if sel.is_caret() { vec![] } else { s.dedit.layout.selection_rects(sel.anchor, sel.head).into_iter().map(|(x, y, w, h)| (x + MARGIN_X, y + MARGIN_Y, w, h)).collect() };
-    let caret = (sel.is_caret() && s.dedit.ed.caret_on).then(|| s.dedit.layout.caret(sel.head)).flatten().map(|(x, y, h)| (x + MARGIN_X, y + MARGIN_Y, h));
+    let rects = if sel.is_caret() { vec![] } else { s.dedit.layout.selection_rects(sel.anchor, sel.head).into_iter().map(|(x, y, w, h)| (x + s.dedit.x0, y + MARGIN_Y, w, h)).collect() };
+    let caret = (sel.is_caret() && s.dedit.ed.caret_on).then(|| s.dedit.layout.caret(sel.head)).flatten().map(|(x, y, h)| (x + s.dedit.x0, y + MARGIN_Y, h));
     (rects, caret)
 }
 
 fn with_doc<R>(s: &State, f: impl FnOnce(&Doc) -> R) -> Option<R> {
     s.ws.as_ref().and_then(|w| w.page.doc.as_ref()).map(f)
+}
+
+// ---- ink that follows the text ---------------------------------------------------------------
+
+/// Keep anchored strokes next to their paragraph and anchor new strokes. Call after `relayout`.
+pub fn sync_anchors(s: &mut State) {
+    if !s.new_editor || s.drag_from.is_some() || !s.live.is_empty() || !s.eraser_path.is_empty() {
+        return;
+    }
+    let Some(ws) = s.ws.as_mut() else { return };
+    if ws.page.doc.is_none() || s.dedit.layout.items.is_empty() {
+        return;
+    }
+    let items: Vec<(u64, f32, f32)> = s.dedit.layout.items.iter().map(|it| (it.id, it.top + MARGIN_Y, it.bottom() + MARGIN_Y)).collect();
+    let last_bottom = items.last().map_or(0.0, |i| i.2);
+    let mut anchors: HashMap<u64, store::InkAnchor> = ws.page.ink_anchors.drain(..).map(|a| (a.stroke, a)).collect();
+    let alive: std::collections::HashSet<u64> = s.doc.strokes.iter().map(|x| x.id).collect();
+    anchors.retain(|id, a| alive.contains(id) && items.iter().any(|i| i.0 == a.para));
+    let mut moved = false;
+    for st in s.doc.strokes.iter_mut() {
+        let Some(first) = st.points.first().map(|p| p.y) else { continue };
+        if let Some(a) = anchors.get(&st.id) {
+            let top = items.iter().find(|i| i.0 == a.para).map_or(0.0, |i| i.1);
+            let delta = top + a.dy - first;
+            if delta.abs() > 0.01 {
+                st.points.iter_mut().for_each(|p| p.y += delta);
+                moved = true;
+            }
+        } else if first >= MARGIN_Y - 30.0 && first <= last_bottom + 40.0 {
+            // anchor to the paragraph the stroke starts in (or the nearest one above it)
+            let idx = items.iter().rposition(|i| i.1 <= first).unwrap_or(0);
+            anchors.insert(st.id, store::InkAnchor { stroke: st.id, para: items[idx].0, dy: first - items[idx].1 });
+        }
+    }
+    let mut list: Vec<store::InkAnchor> = anchors.into_values().collect();
+    list.sort_by_key(|a| a.stroke);
+    if list != ws.page.ink_anchors {
+        ws.page.ink_anchors = list;
+        ws.touch();
+    }
+    if moved {
+        s.sync_ws();
+    }
+}
+
+/// Re-anchor strokes after the user moved them (lasso) so they do not snap back.
+pub fn reanchor(s: &mut State, ids: &[u64]) {
+    if let Some(ws) = &mut s.ws {
+        ws.page.ink_anchors.retain(|a| !ids.contains(&a.stroke));
+    }
+    sync_anchors(s);
+}
+
+// ---- inserting objects, commands ------------------------------------------------------------------
+
+/// Paragraph index after which new content goes: next to the ink it came from, else at the caret.
+fn insertion_after(s: &State, near: &[u64]) -> usize {
+    let doc = s.ws.as_ref().and_then(|w| w.page.doc.as_ref());
+    let Some(doc) = doc else { return 0 };
+    let from_ink = s.ws.as_ref().into_iter().flat_map(|w| w.page.ink_anchors.iter()).filter(|a| near.contains(&a.stroke)).filter_map(|a| doc.index_of(a.para)).max();
+    from_ink.unwrap_or(s.dedit.ed.sel.head.para).min(doc.paras.len().saturating_sub(1))
+}
+
+/// Put a block (math, text, image, plot, callout, rule) into the document after the paragraph at the
+/// caret or after the ink it was recognized from.
+pub fn insert_block(s: &mut State, b: store::Block, near: &[u64]) {
+    let mut tmp = store::Page::new("tmp", "", "");
+    tmp.blocks = vec![b];
+    let add = store::doc_from_page(&tmp);
+    if add.paras.is_empty() {
+        return;
+    }
+    snapshot(s, "");
+    let at = insertion_after(s, near);
+    let Some((doc, ed)) = doc_mut(s) else { return };
+    notedoc::ensure_not_empty(doc);
+    let at = at.min(doc.paras.len() - 1);
+    let replace = doc.paras[at].kind == notedoc::ParaKind::Body && doc.paras[at].runs.is_empty();
+    let n = add.paras.len();
+    for (k, mut p) in add.paras.into_iter().enumerate() {
+        p.id = doc.fresh_id();
+        doc.paras.insert(at + 1 + k, p);
+    }
+    let mut last = at + n;
+    if replace && doc.paras.len() > n + 1 {
+        doc.paras.remove(at);
+        last -= 1;
+    }
+    if last + 1 >= doc.paras.len() {
+        let id = doc.fresh_id();
+        doc.paras.push(notedoc::Para { id, kind: notedoc::ParaKind::Body, runs: vec![] });
+    }
+    ed.sel = Sel::caret(Pos { para: last + 1, off: 0 });
+    after_edit(s);
+}
+
+/// Put recognized handwriting in as a plain paragraph.
+pub fn insert_words(s: &mut State, words: &str, near: &[u64]) {
+    snapshot(s, "");
+    let at = insertion_after(s, near);
+    let Some((doc, ed)) = doc_mut(s) else { return };
+    notedoc::ensure_not_empty(doc);
+    let at = at.min(doc.paras.len() - 1);
+    let id = doc.fresh_id();
+    let p = notedoc::Para { id, kind: notedoc::ParaKind::Body, runs: notedoc::normalize(vec![notedoc::Run::plain(words)]) };
+    let replace = doc.paras[at].kind == notedoc::ParaKind::Body && doc.paras[at].runs.is_empty();
+    doc.paras.insert(at + 1, p);
+    let mut idx = at + 1;
+    if replace {
+        doc.paras.remove(at);
+        idx -= 1;
+    }
+    ed.sel = Sel::caret(Pos { para: idx, off: words.chars().count() });
+    after_edit(s);
+}
+
+/// Formatting and insert commands. Returns true if `id` was one of them.
+pub fn command(s: &mut State, id: &str) -> bool {
+    use notedoc::ParaKind as K;
+    if !id.starts_with("fmt-") && id != "insert-table" {
+        return false;
+    }
+    if s.ws.as_ref().is_none_or(|w| w.page.doc.is_none()) {
+        s.set_status("Switch to the text cursor (Aa) to format text");
+        return true;
+    }
+    let (a, b) = s.dedit.ed.sel.ordered();
+    let kind = match id {
+        "fmt-body" => Some(K::Body),
+        "fmt-h1" => Some(K::Heading(1)),
+        "fmt-h2" => Some(K::Heading(2)),
+        "fmt-h3" => Some(K::Heading(3)),
+        "fmt-bullet" => Some(K::Bullet { indent: 0 }),
+        "fmt-numbered" => Some(K::Numbered { indent: 0 }),
+        "fmt-check" => Some(K::Check { done: false }),
+        "fmt-quote" => Some(K::Quote),
+        _ => None,
+    };
+    if let Some(k) = kind {
+        snapshot(s, "");
+        if let Some((doc, _)) = doc_mut(s) {
+            if k == K::Body {
+                for i in a.para..=b.para.min(doc.paras.len() - 1) {
+                    if doc.paras[i].kind.is_text() {
+                        doc.paras[i].kind = K::Body;
+                    }
+                }
+            } else {
+                notedoc::toggle_kind(doc, a, b, k);
+            }
+        }
+        after_edit(s);
+        return true;
+    }
+    match id {
+        "fmt-bold" => toggle(s, Fmt::Bold),
+        "fmt-italic" => toggle(s, Fmt::Italic),
+        "fmt-underline" => toggle(s, Fmt::Underline),
+        "fmt-code" => toggle(s, Fmt::Code),
+        "fmt-indent" | "fmt-outdent" => {
+            snapshot(s, "");
+            if let Some((doc, _)) = doc_mut(s) {
+                notedoc::indent(doc, a, b, if id == "fmt-indent" { 1 } else { -1 });
+            }
+            after_edit(s);
+        }
+        "insert-table" => insert_block(s, store::Block::Text { markup: "#table(columns: 3, [*A*], [*B*], [*C*], [1], [2], [3])".into() }, &[]),
+        _ => {}
+    }
+    true
+}
+
+/// What the formatting bar shows as active: (bold, italic, underline, paragraph kind name).
+pub fn format_state(s: &State) -> (bool, bool, bool, &'static str) {
+    let Some(doc) = s.ws.as_ref().and_then(|w| w.page.doc.as_ref()) else { return (false, false, false, "") };
+    let sel = s.dedit.ed.sel;
+    let (a, b) = sel.ordered();
+    let style = s.dedit.ed.pending.unwrap_or_else(|| notedoc::style_at(doc, sel.head));
+    let (bold, italic, underline) = if sel.is_caret() { (style.bold, style.italic, style.underline) } else { (notedoc::all_have(doc, a, b, Fmt::Bold), notedoc::all_have(doc, a, b, Fmt::Italic), notedoc::all_have(doc, a, b, Fmt::Underline)) };
+    let kind = match doc.paras.get(sel.head.para).map(|p| &p.kind) {
+        Some(ParaKind::Heading(1)) => "h1",
+        Some(ParaKind::Heading(2)) => "h2",
+        Some(ParaKind::Heading(_)) => "h3",
+        Some(ParaKind::Bullet { .. }) => "bullet",
+        Some(ParaKind::Numbered { .. }) => "numbered",
+        Some(ParaKind::Check { .. }) => "check",
+        Some(ParaKind::Quote) => "quote",
+        Some(ParaKind::Body) => "body",
+        _ => "",
+    };
+    (bold, italic, underline, kind)
+}
+
+pub fn can_undo(s: &State) -> (bool, bool) {
+    (!s.dedit.ed.undo.is_empty(), !s.dedit.ed.redo.is_empty())
+}
+
+pub fn insert_math_at_caret(s: &mut State, typst: &str) {
+    snapshot(s, "");
+    edit_inline_math(s, typst);
+}
+
+fn edit_inline_math(s: &mut State, typst: &str) {
+    let t = typst.to_string();
+    let Some((doc, ed)) = doc_mut(s) else { return };
+    let pos = notedoc::insert_math(doc, ed.sel, &t);
+    ed.sel = Sel::caret(pos);
+    after_edit(s);
+}
+
+/// Link the selected text (or insert the target as linked text) to a page title or web address.
+pub fn link_selection(s: &mut State, target: &str) {
+    let link = if target.starts_with("http://") || target.starts_with("https://") { notedoc::Link::Url(target.to_string()) } else { notedoc::Link::Page(target.to_string()) };
+    snapshot(s, "");
+    let sel = s.dedit.ed.sel;
+    if sel.is_caret() {
+        let Some((doc, ed)) = doc_mut(s) else { return };
+        let label = match &link {
+            notedoc::Link::Page(t) => t.clone(),
+            notedoc::Link::Url(u) => u.clone(),
+        };
+        let pos = notedoc::insert_inline(doc, ed.sel.head, notedoc::Run::Text { text: label, style: Style::default(), link: Some(link) });
+        ed.sel = Sel::caret(pos);
+    } else {
+        let (a, b) = sel.ordered();
+        if let Some((doc, _)) = doc_mut(s) {
+            notedoc::set_link(doc, a, b, Some(link));
+        }
+    }
+    after_edit(s);
 }

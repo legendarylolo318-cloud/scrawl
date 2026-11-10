@@ -294,15 +294,15 @@ impl Canvas {
                 if let Some(size) = page {
                     draw_page_frames(&mut pm, size, view, px_scale, overlay.light);
                 }
+                for (x, y, tp) in overlay.texts {
+                    let (sx, sy) = ((x * view.scale + view.ox) * px_scale, (y * view.scale + view.oy) * px_scale);
+                    pm.draw_pixmap(sx as i32, sy as i32, tp.as_ref().as_ref(), &tiny_skia::PixmapPaint::default(), Transform::identity(), None);
+                }
                 for s in strokes.iter().filter(|s| s.kind == PenKind::Highlighter) {
                     draw_stroke(&mut pm, s, view, px_scale, overlay.light);
                 }
                 for s in strokes.iter().filter(|s| s.kind == PenKind::Pen) {
                     draw_stroke(&mut pm, s, view, px_scale, overlay.light);
-                }
-                for (x, y, tp) in overlay.texts {
-                    let (sx, sy) = ((x * view.scale + view.ox) * px_scale, (y * view.scale + view.oy) * px_scale);
-                    pm.draw_pixmap(sx as i32, sy as i32, tp.as_ref().as_ref(), &tiny_skia::PixmapPaint::default(), Transform::identity(), None);
                 }
                 pm
             });

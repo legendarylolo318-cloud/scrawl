@@ -4,6 +4,7 @@ mod actions;
 mod commands;
 mod docedit;
 mod graphview;
+mod menus;
 mod handwriting;
 mod headless;
 mod pagedoc;
@@ -58,6 +59,8 @@ pub enum Prompt {
     PlotFunctions,
     RestoreBackup(String),
     ExternalChange,
+    InlineMath,
+    LinkTarget,
 }
 
 /// Which parts of the UI need refreshing after a state change.
@@ -143,6 +146,8 @@ pub struct State {
     pub textbox_typed: bool,
     pub textbox_first: String,
     /// Hidden while the document editor is built: show the page as a document (setting or SCRAWL_NEW_EDITOR=1).
+    /// The handwriting suggestion was dismissed (Keep as ink) until the next stroke.
+    pub chip_dismissed: bool,
     pub new_editor: bool,
     pub dedit: docedit::DocEdit,
 }
@@ -217,7 +222,8 @@ impl State {
             type_cursor: None,
             textbox_typed: false,
             textbox_first: String::new(),
-            new_editor: settings.new_editor || std::env::var("SCRAWL_NEW_EDITOR").is_ok(),
+            chip_dismissed: false,
+            new_editor: (settings.new_editor || std::env::var("SCRAWL_NEW_EDITOR").is_ok()) && std::env::var("SCRAWL_OLD_EDITOR").is_err(),
             dedit: docedit::DocEdit::new(Arc::new(render::MathCache::default())),
             settings,
         };
@@ -434,8 +440,13 @@ fn refresh_canvas(ui: &MainWindow, st: &mut State) {
     texts.extend(doc_layer(st, scale, w as f32, h as f32));
     let texts_key = { use std::hash::{Hash, Hasher}; let mut h = std::collections::hash_map::DefaultHasher::new(); for (x, y, p) in &texts { (x.to_bits(), y.to_bits(), Arc::as_ptr(p) as usize).hash(&mut h); } h.finish() };
     let (doc_sel, caret) = docedit::overlay_geometry(st);
+    update_chip(ui, st);
     let ov = Overlay { lasso: &st.lasso, selection: sel, light, texts: &texts, texts_key, doc_sel: &doc_sel, caret, accent: st.settings.colors().accent };
     let mut paper = st.paper;
+    if st.new_editor && paper.kind == PaperKind::Lined {
+        // ruled lines would not line up with the text of a document; grid, dots etc. are still available
+        paper.kind = PaperKind::Blank;
+    }
     if light && paper.color[..3] == [0x41, 0x48, 0x68] {
         paper.color = [0xc4, 0xc9, 0xd9, 0xff];
     }
@@ -558,6 +569,17 @@ fn refresh_tabs(ui: &MainWindow, st: &mut State) {
 
 fn refresh_tools(ui: &MainWindow, st: &State) {
     ui.set_new_editor(st.new_editor);
+    if st.new_editor {
+        let (b, i, u, k) = docedit::format_state(st);
+        ui.set_fmt_bold(b);
+        ui.set_fmt_italic(i);
+        ui.set_fmt_underline(u);
+        ui.set_para_kind(k.into());
+        let (cu, cr) = docedit::can_undo(st);
+        ui.set_doc_can_undo(cu);
+        ui.set_doc_can_redo(cr);
+        ui.set_current_color(slint::Color::from_rgb_u8(st.color[0], st.color[1], st.color[2]));
+    }
     ui.set_tool(match st.tool { Tool::Pen => "pen", Tool::Highlighter => "highlighter", Tool::Eraser => "eraser", Tool::Lasso => "lasso", Tool::TextBox => "textbox" }.into());
     ui.set_mode(if st.mode == InkMode::Drawing { "drawing" } else if st.text_mode { "text" } else { "math" }.into());
     match st.textbox {
@@ -627,6 +649,7 @@ pub fn refresh_graph(ui: &MainWindow, st: &State) {
 }
 
 pub fn update_strip(ui: &MainWindow, st: &State) {
+    update_chip(ui, st);
     let cands: Vec<SharedString> = st.session.selected.and_then(|i| st.session.symbols.get(i)).map(|s| s.cands.iter().map(|c| SharedString::from(c.label.as_str())).collect()).unwrap_or_default();
     ui.set_candidates(model(cands));
     update_expr(ui, st);
@@ -966,6 +989,23 @@ fn main() -> Result<(), slint::PlatformError> {
             handled
         });
     }
+    ui.on_open_menu(with!(|ui, _s, name = SharedString| {
+        if ui.get_menu() == name {
+            ui.set_menu("".into());
+        } else {
+            let mut rows: Vec<MenuRow> = Vec::new();
+            let mut last = "";
+            for it in menus::menu(&name) {
+                if it.group != last {
+                    rows.push(MenuRow { id: "".into(), label: it.group.into(), hint: "".into(), header: true });
+                    last = it.group;
+                }
+                rows.push(MenuRow { id: it.id.into(), label: it.label.into(), hint: it.hint.into(), header: false });
+            }
+            ui.set_menu_items(model(rows));
+            ui.set_menu(name);
+        }
+    }));
     ui.on_run_command(with!(|ui, s, id = SharedString| actions::run(&ui, s, &id)));
 
     // ---- typing mode ------------------------------------------------------------------------
@@ -1431,6 +1471,28 @@ fn run_scene(ui: &MainWindow, st: &Rc<RefCell<State>>, scene: &str) {
                 assert_eq!(d.paras[2].kind, notedoc::ParaKind::Bullet { indent: 0 }, "{:?}", d.paras);
                 assert!(d.paras.len() >= 5, "{:?}", d.paras);
             }
+            "menu" => ui.invoke_open_menu("insert".into()),
+            "menumore" => ui.invoke_open_menu("more".into()),
+            "drawer" => ui.set_drawer_open(true),
+            "tray" => ui.set_tray_panel("settings".into()),
+            "docink" => {
+                {
+                    let s = &mut *st.borrow_mut();
+                    s.new_editor = true;
+                    if let Some(ws) = &mut s.ws {
+                        ws.page.doc = Some(notedoc::Doc::from_markup("= Shopping and sums\nWrite anywhere with the pen: ink sits on top of the text and scrolls with it.\n\n- milk and bread"));
+                    }
+                    s.dirty |= dirty::CANVAS | dirty::TOOLS;
+                    flush(ui, s);
+                }
+                ui.invoke_set_tool("pen".into());
+                let (ox, oy) = (60.0, 330.0);
+                draw(&line((ox, oy + 30.0), (ox + 60.0, oy + 30.0)));
+                draw(&line((ox + 30.0, oy), (ox + 30.0, oy + 60.0)));
+                draw(&line((ox + 110.0, oy + 15.0), (ox + 170.0, oy + 15.0)));
+                draw(&line((ox + 110.0, oy + 45.0), (ox + 170.0, oy + 45.0)));
+                ui.invoke_run_command("recognize".into());
+            }
             "tablet" => ui.set_show_tablet(true),
             "notes" => {
                 ui.invoke_new_page("problem set".into());
@@ -1535,14 +1597,45 @@ fn doc_layer(st: &mut State, px_scale: f32, canvas_w: f32, canvas_h: f32) -> Vec
     let c = docview::Colors { text: colors.text, link: colors.accent, muted: colors.muted, accent: colors.accent };
     let zoom = st.view.scale;
     let col_w = docedit::DocEdit::column_width(canvas_w, zoom);
-    let Some(ws) = &mut st.ws else { return vec![] };
-    if ws.page.doc.is_none() {
-        ws.page.ensure_doc();
-        ws.touch();
+    {
+        let Some(ws) = &mut st.ws else { return vec![] };
+        if ws.page.doc.is_none() {
+            ws.page.ensure_doc();
+            ws.touch();
+        }
+        let Some(doc) = ws.page.doc.as_ref() else { return vec![] };
+        for p in &doc.paras {
+            if let notedoc::ParaKind::Image { file, .. } = &p.kind {
+                if !st.dedit.objs.media.iter().any(|(n, _)| n == file) {
+                    if let Some(bytes) = ws.media(file) {
+                        st.dedit.objs.media.push((file.clone(), bytes));
+                    }
+                }
+            }
+        }
+        st.dedit.relayout(doc, col_w, canvas_w, zoom);
     }
-    st.dedit.objs.media = ws.page_media(&ws.page);
-    let Some(doc) = ws.page.doc.as_ref() else { return vec![] };
-    st.dedit.relayout(doc, col_w);
+    docedit::sync_anchors(st);
+    let Some(doc) = st.ws.as_ref().and_then(|w| w.page.doc.as_ref()) else { return vec![] };
     let (y0, y1) = (-st.view.oy / zoom, (canvas_h - st.view.oy) / zoom);
     st.dedit.visible(doc, y0, y1, zoom * px_scale, &c)
+}
+
+/// The handwriting suggestion chip next to the ink that was just written.
+fn update_chip(ui: &MainWindow, st: &State) {
+    let has_text = if st.text_mode { !st.text_result.trim().is_empty() } else { !current_expr(st).is_empty() };
+    let show = st.new_editor && !st.chip_dismissed && !st.training && !st.typing && has_text && !st.session.symbols.is_empty() && st.tool != Tool::TextBox;
+    ui.set_chip_visible(show);
+    if !show {
+        return;
+    }
+    let (mut x0, mut y1) = (f32::MAX, f32::MIN);
+    for s in &st.session.symbols {
+        x0 = x0.min(s.rect.x0);
+        y1 = y1.max(s.rect.y1);
+    }
+    ui.set_chip_x(x0 * st.view.scale + st.view.ox);
+    ui.set_chip_y(y1 * st.view.scale + st.view.oy + 14.0);
+    ui.set_chip_math(!st.text_mode);
+    ui.set_chip_text(format!("“{}”", st.text_result.trim().replace('\n', " / ")).into());
 }

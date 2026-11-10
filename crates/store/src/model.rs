@@ -81,6 +81,9 @@ pub struct Page {
     /// document editor; `blocks` is then the content. Once set, `blocks` is rebuilt from it on save.
     #[serde(default)]
     pub doc: Option<notedoc::Doc>,
+    /// Ink that follows the text: stroke -> paragraph it was written next to (see `InkAnchor`).
+    #[serde(default)]
+    pub ink_anchors: Vec<InkAnchor>,
     pub modified_ms: u64,
 }
 
@@ -103,6 +106,7 @@ impl Page {
             texts: vec![],
             ink_mode: None,
             doc: None,
+            ink_anchors: vec![],
             modified_ms: 0,
         }
     }
@@ -353,4 +357,13 @@ impl CanvasText {
         let longest = lines.iter().map(|l| l.chars().count()).max().unwrap_or(1).max(1) as f32;
         (self.x, self.y, self.x + longest * self.size * 0.55, self.y + lines.len().max(1) as f32 * self.size * 1.3)
     }
+}
+
+/// A stroke written next to a paragraph: it keeps its distance `dy` (page units) below the paragraph's
+/// top, so the ink stays next to the right text when earlier paragraphs grow or shrink.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct InkAnchor {
+    pub stroke: u64,
+    pub para: u64,
+    pub dy: f32,
 }

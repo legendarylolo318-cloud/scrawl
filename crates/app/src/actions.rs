@@ -78,6 +78,7 @@ pub fn pointer_down(s: &mut State, x: f32, y: f32) {
     if docedit::pointer_down(s, x, y) {
         return;
     }
+    s.chip_dismissed = false;
     let (px, py) = s.view.to_page(x, y);
     s.type_cursor = Some((px, py));
     s.down_at = Some(Instant::now());
@@ -181,6 +182,7 @@ pub fn pointer_up(ui: &MainWindow, s: &mut State) -> bool {
                     let ids = s.selection.clone();
                     s.doc.translate_ids(&ids, dx, dy);
                     s.sync_ws();
+                    docedit::reanchor(s, &ids);
                     s.set_status("Moved selection (Undo puts it back)");
                     return true;
                 }
@@ -281,6 +283,25 @@ pub fn shortcut(ui: &MainWindow, s: &mut State, key: &str, ctrl: bool, alt: bool
 pub fn run(ui: &MainWindow, s: &mut State, id: &str) {
     let now = s.now_ms();
     match id {
+        "fmt-math" => {
+            ask(ui, s, Prompt::InlineMath, "Inline math", "Type math in Typst or LaTeX, for example x^2 + 1 or \\frac{a}{b}", false);
+            return;
+        }
+        "fmt-link" => {
+            ask(ui, s, Prompt::LinkTarget, "Link", "A page title, or a web address starting with http", false);
+            return;
+        }
+        "chip-dismiss" => {
+            s.chip_dismissed = true;
+            s.dirty |= dirty::STRIP | dirty::CANVAS;
+            return;
+        }
+        _ => {}
+    }
+    if docedit::command(s, id) {
+        return;
+    }
+    match id {
         "palette" | "shortcuts" => {
             s.rebinding = None;
             open_overlay(ui, s, id);
@@ -368,6 +389,9 @@ pub fn run(ui: &MainWindow, s: &mut State, id: &str) {
                 s.doc.undo();
             } else {
                 s.doc.redo();
+            }
+            if let Some(w) = &mut s.ws {
+                w.page.ink_anchors.clear();
             }
             s.selection.retain(|i| s.doc.strokes.iter().any(|x| x.id == *i));
             s.sync_ws();
@@ -651,7 +675,11 @@ pub fn insert_expression(ui: &MainWindow, s: &mut State) {
         return;
     }
     let used: Vec<u64> = s.session.symbols.iter().flat_map(|x| x.stroke_ids.clone()).collect();
-    add_block(s, store::Block::Math { expr: e, source: None });
+    if s.new_editor && s.ws.as_ref().is_some_and(|w| w.page.doc.is_some()) {
+        docedit::insert_block(s, store::Block::Math { expr: e, source: None }, &used);
+    } else {
+        add_block(s, store::Block::Math { expr: e, source: None });
+    }
     if !used.is_empty() {
         s.doc.remove_ids(&used);
         s.sync_ws();
@@ -662,6 +690,10 @@ pub fn insert_expression(ui: &MainWindow, s: &mut State) {
 }
 
 pub fn add_block(s: &mut State, b: store::Block) {
+    if s.new_editor && s.ws.as_ref().is_some_and(|w| w.page.doc.is_some()) {
+        docedit::insert_block(s, b, &[]);
+        return;
+    }
     if let Some(w) = &mut s.ws {
         let at = s.editing.map(|i| i + 1).unwrap_or(w.page.blocks.len()).min(w.page.blocks.len());
         w.page.blocks.insert(at, b);
@@ -1107,6 +1139,11 @@ pub fn prompt_ok(ui: &MainWindow, s: &mut State, text: &str) {
             let path = PathBuf::from(t.trim_matches('"'));
             open_file(ui, s, &path);
         }
+        Prompt::InlineMath if !t.is_empty() => {
+            let src = if layout::looks_like_latex(t) { layout::latex_to_typst(t) } else { t.trim_matches('$').trim().to_string() };
+            docedit::insert_math_at_caret(s, &src);
+        }
+        Prompt::LinkTarget if !t.is_empty() => docedit::link_selection(s, t),
         Prompt::PlotFunctions if !t.is_empty() => {
             let functions: Vec<String> = t.split(';').map(|f| f.trim().to_string()).filter(|f| !f.is_empty()).collect();
             let b = store::Block::Plot { functions, x_range: (-6.0, 6.0), y_range: None };
@@ -1596,7 +1633,9 @@ fn insert_words(s: &mut State) {
         return;
     }
     let used: Vec<u64> = s.session.symbols.iter().flat_map(|x| x.stroke_ids.clone()).collect();
-    if let Some(w) = &mut s.ws {
+    if s.new_editor && s.ws.as_ref().is_some_and(|w| w.page.doc.is_some()) {
+        docedit::insert_words(s, &words, &used);
+    } else if let Some(w) = &mut s.ws {
         match w.page.blocks.last_mut() {
             Some(store::Block::Text { markup }) if s.editing.is_none() => {
                 if !markup.ends_with('\n') && !markup.is_empty() {

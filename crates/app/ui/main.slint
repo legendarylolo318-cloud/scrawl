@@ -130,6 +130,139 @@ component SectionTitle inherits Text {
     font-weight: 700;
 }
 
+export struct MenuRow { id: string, label: string, hint: string, header: bool }
+
+// Left list of notebooks, sections and pages: search, tree, filters, new page. Used as a fixed sidebar
+// on wide windows and inside the slide-over drawer on narrow ones.
+component SidebarPanel inherits Rectangle {
+    in property <[PageRow]> rows;
+    in property <[PageRow]> results;
+    in property <bool> search-active;
+    in property <[string]> notebooks;
+    in property <int> notebook-index;
+    in property <int> filter-index;
+    in property <data-transfer> drag-data;
+    in-out property <string> drag-src;
+    callback open-page(string);
+    callback do-search(string);
+    callback set-notebook(int);
+    callback set-filter(int);
+    callback move-row(string, int);
+    callback drop-row(string, string);
+    callback command(string);
+    background: Theme.panel;
+    VerticalLayout {
+        padding: 8px * Theme.scale; spacing: 6px * Theme.scale;
+        HorizontalLayout {
+            spacing: 4px;
+            ComboBox { height: Theme.hit; model: root.notebooks; current-index: root.notebook-index; selected => { root.set-notebook(self.current-index); } }
+            ToolButton { label: "+"; tip: "New notebook"; clicked => { root.command("new-notebook"); } }
+        }
+        LineEdit {
+            height: Theme.hit;
+            placeholder-text: "Search notes";
+            edited(t) => { root.do-search(t); }
+        }
+        HorizontalLayout {
+            spacing: 4px;
+            ToolButton { label: "All"; active: root.filter-index == 0; clicked => { root.set-filter(0); } }
+            ToolButton { label: "Pinned"; active: root.filter-index == 1; clicked => { root.set-filter(1); } }
+            ToolButton { label: "Recent"; active: root.filter-index == 2; clicked => { root.set-filter(2); } }
+        }
+        ScrollView {
+            VerticalLayout {
+                spacing: 2px;
+                alignment: start;
+                for p in (root.search-active ? root.results : root.rows) : Rectangle {
+                    height: p.is-section ? Theme.hit : (p.detail == "" ? Theme.hit : Theme.hit + 20px * Theme.scale);
+                    border-radius: 6px;
+                    background: da.has-drag ? Theme.hover : p.current ? Theme.accent : pa.has-hover ? Theme.hover : transparent;
+                    da := DropArea {
+                        can-drop(e) => { return DragAction.move; }
+                        dropped(e) => { root.drop-row(root.drag-src, p.id); return DragAction.move; }
+                    }
+                    DragArea {
+                        enabled: !p.is-section && !root.search-active;
+                        data: root.drag-data;
+                        allow-move: true;
+                        changed dragging => { if self.dragging { root.drag-src = p.id; } }
+                        pa := TouchArea { clicked => { if !p.is-section { root.open-page(p.id); } } }
+                    }
+                    HorizontalLayout {
+                        padding-left: p.is-section ? 6px : 22px; padding-right: 4px; spacing: 2px;
+                        VerticalLayout {
+                            alignment: center;
+                            Text { text: (p.favorite ? "★ " : "") + p.title; color: p.is-section ? Theme.muted : p.current ? Theme.on-accent : Theme.text; font-weight: p.is-section ? 700 : 400; font-size: p.is-section ? Theme.fs-small : Theme.fs; overflow: elide; }
+                            if p.detail != "" && !p.is-section : Text { text: p.detail; color: p.current ? Theme.on-accent : Theme.muted; font-size: Theme.fs-small; overflow: elide; }
+                        }
+                        if !p.is-section && !root.search-active && pa.has-hover : ToolButton { label: "▲"; tip: "Move up"; clicked => { root.move-row(p.id, -1); } }
+                        if !p.is-section && !root.search-active && pa.has-hover : ToolButton { label: "▼"; tip: "Move down"; clicked => { root.move-row(p.id, 1); } }
+                    }
+                }
+            }
+        }
+        HorizontalLayout {
+            spacing: 4px;
+            ToolButton { label: "+ New page"; active: true; horizontal-stretch: 1; clicked => { root.command("new-page"); } }
+            ToolButton { label: "Trash"; clicked => { root.command("trash"); } }
+        }
+    }
+}
+
+// A drop-down list of actions under a top-bar button.
+component MenuCard inherits Rectangle {
+    in property <[MenuRow]> items;
+    in property <length> avail-h;
+    callback pick(string);
+    width: 330px * Theme.scale;
+    height: min(root.avail-h, col.preferred-height + 12px);
+    border-radius: 10px;
+    background: Theme.panel;
+    border-width: 1px;
+    border-color: Theme.accent;
+    TouchArea { }
+    ScrollView {
+        col := VerticalLayout {
+            padding: 6px; spacing: 1px;
+            alignment: start;
+            for it in root.items : Rectangle {
+                height: it.header ? 30px * Theme.scale : Theme.hit;
+                border-radius: 6px;
+                background: !it.header && ma.has-hover ? Theme.hover : transparent;
+                ma := TouchArea { enabled: !it.header; clicked => { root.pick(it.id); } }
+                HorizontalLayout {
+                    padding-left: 10px; padding-right: 10px; spacing: 8px;
+                    Text { text: it.header ? it.label.to-uppercase() : it.label; color: it.header ? Theme.muted : Theme.text; font-size: it.header ? Theme.fs-small : Theme.fs; font-weight: it.header ? 700 : 400; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+                    Text { text: it.hint; color: Theme.muted; font-size: Theme.fs-small; vertical-alignment: center; }
+                }
+            }
+        }
+    }
+}
+
+// A page title that looks like text, not like a form field.
+component TitleEdit inherits Rectangle {
+    in-out property <string> text;
+    in property <string> placeholder-text;
+    callback edited(string);
+    callback accepted(string);
+    height: Theme.hit;
+    border-radius: 6px;
+    background: ti.has-focus ? Theme.hover : transparent;
+    ti := TextInput {
+        x: 10px; width: parent.width - 20px;
+        y: (parent.height - self.preferred-height) / 2;
+        text <=> root.text;
+        color: Theme.text; font-size: Theme.fs * 1.15; font-weight: 700;
+        single-line: true;
+        selection-background-color: Theme.accent;
+        selection-foreground-color: Theme.on-accent;
+        edited => { root.edited(self.text); }
+        accepted => { root.accepted(self.text); }
+    }
+    if ti.text == "" : Text { x: 10px; text: root.placeholder-text; color: Theme.muted; font-size: Theme.fs * 1.15; vertical-alignment: center; height: parent.height; }
+}
+
 // Modal card in the middle of the window; clicking the dimmed area closes it.
 component Modal inherits Rectangle {
     in property <string> title;
@@ -172,7 +305,7 @@ export component MainWindow inherits Window {
     // ---- adaptive layout
     in-out property <length> win-w: 1280px;
     in-out property <length> win-h: 780px;
-    init => { root.win-w = root.width; root.win-h = root.height; }
+    init => { root.win-w = root.width; root.win-h = root.height; Palette.color-scheme = root.dark-scheme ? ColorScheme.dark : ColorScheme.light; }
     changed width => { root.win-w = root.width; root.window-resized(root.width, root.height); }
     changed height => { root.win-h = root.height; root.window-resized(root.width, root.height); }
     in-out property <bool> dark-scheme: true;
@@ -204,6 +337,24 @@ export component MainWindow inherits Window {
     in property <string> tool: "pen";
     in property <string> mode: "math";
     in property <bool> new-editor: false;
+    in-out property <string> menu: "";
+    in property <[MenuRow]> menu-items;
+    in-out property <bool> drawer-open: false;
+    in property <bool> fmt-bold: false;
+    in property <bool> fmt-italic: false;
+    in property <bool> fmt-underline: false;
+    in property <string> para-kind: "";
+    in property <bool> doc-can-undo: false;
+    in property <bool> doc-can-redo: false;
+    in-out property <bool> tray-open: true;
+    in-out property <string> tray-panel: "";
+    in property <color> current-color: #c0caf5;
+    in property <bool> chip-visible: false;
+    in property <length> chip-x;
+    in property <length> chip-y;
+    in property <string> chip-text;
+    in property <bool> chip-math: false;
+    callback open-menu(string);
     in property <bool> pixel-erase: false;
     in property <bool> can-undo: false;
     in property <bool> can-redo: false;
@@ -237,7 +388,7 @@ export component MainWindow inherits Window {
     in property <[PageRow]> pages;
     in property <[PageRow]> search-results;
     in property <bool> search-active: false;
-    in property <string> page-title;
+    in-out property <string> page-title;
     in property <bool> page-favorite: false;
     in property <string> page-tags;
     in property <[string]> templates;
@@ -401,6 +552,7 @@ export component MainWindow inherits Window {
                 if root.shortcut(e.text, e.modifiers.control, e.modifiers.alt, e.modifiers.shift, e.modifiers.meta) { return accept; }
                 return accept;
             }
+            if e.text == Key.Escape && root.menu != "" { root.menu = ""; return accept; }
             if e.text == Key.Escape && root.overlay != "" { root.close-overlay(); return accept; }
             if e.modifiers.control || e.modifiers.alt || e.modifiers.meta || (e.text >= Key.F1 && e.text <= Key.F24) {
                 if root.shortcut(e.text, e.modifiers.control, e.modifiers.alt, e.modifiers.shift, e.modifiers.meta) { return accept; }
@@ -437,8 +589,58 @@ export component MainWindow inherits Window {
         }
 
         VerticalLayout {
+            // ---- calm top bar (document editor)
+            if root.new-editor && !root.focus-mode && !root.present-mode : Rectangle {
+                background: Theme.surface;
+                height: Theme.hit + 16px * Theme.scale;
+                HorizontalLayout {
+                    padding: 8px * Theme.scale; spacing: 6px * Theme.scale;
+                    ToolButton { label: "☰"; tip: "Notes"; active: root.narrow ? root.drawer-open : root.show-sidebar; clicked => { if root.narrow { root.drawer-open = !root.drawer-open; } else { root.run-command("toggle-sidebar"); } } }
+                    if !root.tiny : ToolButton { label: "◀"; tip: "Back (Alt+Left)"; enabled: root.can-back; clicked => { root.run-command("back"); } }
+                    if !root.tiny : ToolButton { label: "▶"; tip: "Forward (Alt+Right)"; enabled: root.can-forward; clicked => { root.run-command("forward"); } }
+                    TitleEdit {
+                        horizontal-stretch: 1;
+                        min-width: 60px;
+                        text <=> root.page-title;
+                        placeholder-text: "Untitled";
+                        accepted(t) => { root.rename-page(t); fs.focus(); }
+                        edited(t) => { root.rename-page(t); }
+                    }
+                    if !root.tiny : ToolButton { label: root.page-favorite ? "★" : "☆"; tip: "Pin this page"; active: root.page-favorite; clicked => { root.run-command("favorite"); } }
+                    ToolButton { label: "↶"; tip: "Undo (Ctrl+Z)"; enabled: root.can-undo || root.doc-can-undo; clicked => { root.run-command("undo"); } }
+                    ToolButton { label: "↷"; tip: "Redo (Ctrl+Y)"; enabled: root.can-redo || root.doc-can-redo; clicked => { root.run-command("redo"); } }
+                    ToolButton { label: root.tiny ? "+" : "+ Insert"; tip: "Insert"; active: root.menu == "insert"; clicked => { root.open-menu("insert"); } }
+                    if !root.narrow : ToolButton { label: "Share"; active: root.menu == "share"; clicked => { root.open-menu("share"); } }
+                    ToolButton { label: "⋯"; tip: "More"; active: root.menu == "more"; clicked => { root.open-menu("more"); } }
+                    if !root.tiny : ToolButton { label: "Find"; tip: "Find anything (Ctrl+K)"; clicked => { root.run-command("palette"); } }
+                }
+            }
+            // ---- formatting bar: only while the text cursor is the tool
+            if root.new-editor && root.tool == "textbox" && !root.focus-mode && !root.present-mode && !root.short : Rectangle {
+                background: Theme.panel;
+                height: Theme.hit + 12px * Theme.scale;
+                ScrollRow {
+                    ToolButton { label: "Normal"; active: root.para-kind == "body"; clicked => { root.run-command("fmt-body"); } }
+                    ToolButton { label: "H1"; tip: "Heading"; active: root.para-kind == "h1"; clicked => { root.run-command("fmt-h1"); } }
+                    ToolButton { label: "H2"; tip: "Subheading"; active: root.para-kind == "h2"; clicked => { root.run-command("fmt-h2"); } }
+                    ToolButton { label: "H3"; active: root.para-kind == "h3"; clicked => { root.run-command("fmt-h3"); } }
+                    Rectangle { width: 8px; }
+                    ToolButton { label: "B"; tip: "Bold (Ctrl+B)"; active: root.fmt-bold; clicked => { root.run-command("fmt-bold"); } }
+                    ToolButton { label: "I"; tip: "Italic (Ctrl+I)"; active: root.fmt-italic; clicked => { root.run-command("fmt-italic"); } }
+                    ToolButton { label: "U"; tip: "Underline (Ctrl+U)"; active: root.fmt-underline; clicked => { root.run-command("fmt-underline"); } }
+                    ToolButton { label: "</>"; tip: "Code"; clicked => { root.run-command("fmt-code"); } }
+                    Rectangle { width: 8px; }
+                    ToolButton { label: "•"; tip: "Bullet list"; active: root.para-kind == "bullet"; clicked => { root.run-command("fmt-bullet"); } }
+                    ToolButton { label: "1."; tip: "Numbered list"; active: root.para-kind == "numbered"; clicked => { root.run-command("fmt-numbered"); } }
+                    ToolButton { label: "☑"; tip: "Checklist"; active: root.para-kind == "check"; clicked => { root.run-command("fmt-check"); } }
+                    ToolButton { label: "❝"; tip: "Quote"; active: root.para-kind == "quote"; clicked => { root.run-command("fmt-quote"); } }
+                    Rectangle { width: 8px; }
+                    ToolButton { label: "∑ Math"; tip: "Math inside the text"; clicked => { root.run-command("fmt-math"); } }
+                    ToolButton { label: "Link"; clicked => { root.run-command("fmt-link"); } }
+                }
+            }
             // ---- row 1: ink tools
-            if !root.focus-mode && !root.present-mode : Rectangle {
+            if !root.focus-mode && !root.present-mode && !root.new-editor : Rectangle {
                 background: Theme.surface;
                 height: Theme.hit + 16px * Theme.scale;
                 ScrollRow {
@@ -466,7 +668,7 @@ export component MainWindow inherits Window {
                 }
             }
             // ---- row 2: notes + modes
-            if !root.focus-mode && !root.present-mode : Rectangle {
+            if !root.focus-mode && !root.present-mode && !root.new-editor : Rectangle {
                 background: Theme.panel;
                 height: Theme.hit + 12px * Theme.scale;
                 ScrollRow {
@@ -495,7 +697,7 @@ export component MainWindow inherits Window {
                 }
             }
             // ---- row 3: colours, favourite pens, sliders
-            if !root.focus-mode && !root.present-mode && root.show-sliders && !root.short : Rectangle {
+            if !root.focus-mode && !root.present-mode && root.show-sliders && !root.short && !root.new-editor : Rectangle {
                 background: Theme.surface;
                 height: Theme.hit + 12px * Theme.scale;
                 ScrollRow {
@@ -527,7 +729,7 @@ export component MainWindow inherits Window {
                 }
             }
             // ---- candidate strip / typing / training
-            if !root.present-mode : Rectangle {
+            if !root.present-mode && !root.new-editor : Rectangle {
                 background: Theme.panel;
                 height: (root.typing && root.suggestions.length > 0 ? 2 : 1) * (Theme.hit + 24px * Theme.scale);
                 VerticalLayout {
@@ -594,8 +796,22 @@ export component MainWindow inherits Window {
             }
             // ---- main area
             HorizontalLayout {
+                // calm sidebar (document editor): fixed on wide windows, a drawer on narrow ones
+                if root.new-editor && root.show-sidebar && !root.narrow && !root.focus-mode && !root.present-mode && !(root.graph-mode && root.win-w < 1150px) : SidebarPanel {
+                    width: 260px * Theme.scale;
+                    rows: root.pages; results: root.search-results; search-active: root.search-active;
+                    notebooks: root.notebooks; notebook-index: root.notebook-index; filter-index: root.filter-index;
+                    drag-data: root.drag-data; drag-src <=> root.drag-src;
+                    open-page(id) => { root.open-page(id); }
+                    do-search(t) => { root.do-search(t); }
+                    set-notebook(i) => { root.set-notebook(i); }
+                    set-filter(i) => { root.set-filter(i); }
+                    move-row(id, d) => { root.move-row(id, d); }
+                    drop-row(a, b) => { root.drop-row(a, b); }
+                    command(c) => { root.run-command(c); }
+                }
                 // sidebar
-                if root.show-sidebar && !root.tiny && !root.focus-mode && !root.present-mode && !(root.graph-mode && root.win-w < 1150px) : Rectangle {
+                if root.show-sidebar && !root.tiny && !root.focus-mode && !root.present-mode && !(root.graph-mode && root.win-w < 1150px) && !root.new-editor : Rectangle {
                     width: root.sidebar-w;
                     background: Theme.panel;
                     VerticalLayout {
@@ -653,7 +869,7 @@ export component MainWindow inherits Window {
                     }
                 }
                 // content: ink canvas or graph
-                if !root.graph-mode && !(root.tiny && root.doc-on-narrow && !root.present-mode) : canvas := Rectangle {
+                if !root.graph-mode && (root.new-editor || !(root.tiny && root.doc-on-narrow && !root.present-mode)) : canvas := Rectangle {
                     background: Theme.bg;
                     clip: true;
                     changed width => { root.canvas-resized(self.width, self.height); }
@@ -697,10 +913,121 @@ export component MainWindow inherits Window {
                             ToolButton { label: "✕"; tip: "Cancel"; clicked => { root.textbox-cancel(); } }
                         }
                     }
+                    // ---- handwriting suggestion next to the ink
+                    if root.new-editor && root.chip-visible && !root.present-mode : Rectangle {
+                        width: min(parent.width - 16px, 440px * Theme.scale);
+                        height: chip-col.preferred-height + 12px;
+                        x: max(8px, min(root.chip-x, parent.width - self.width - 8px));
+                        y: max(8px, min(root.chip-y, parent.height - self.height - 90px * Theme.scale));
+                        border-radius: 10px; background: Theme.panel; border-width: 2px; border-color: Theme.accent;
+                        TouchArea { }
+                        chip-col := VerticalLayout {
+                            padding: 6px; spacing: 4px;
+                            HorizontalLayout {
+                                spacing: 6px;
+                                if root.chip-math && root.has-expr-image : Image { source: root.expr-image; height: Theme.hit; image-fit: contain; horizontal-stretch: 1; }
+                                if !(root.chip-math && root.has-expr-image) : Text { text: root.chip-text; color: Theme.text; font-size: Theme.fs * 1.2; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+                                ToolButton { label: "✓ Accept"; active: true; tip: "Put it in the page (Ctrl+Enter)"; clicked => { root.run-command("insert"); fs.focus(); } }
+                                ToolButton { label: "Keep ink"; tip: "Leave it as handwriting"; clicked => { root.run-command("chip-dismiss"); fs.focus(); } }
+                            }
+                            if root.candidates.length > 0 : HorizontalLayout {
+                                spacing: 4px; alignment: start;
+                                Text { text: "Not right?"; color: Theme.muted; font-size: Theme.fs-small; vertical-alignment: center; }
+                                for c[i] in root.candidates : Rectangle {
+                                    width: Theme.hit; height: Theme.hit; border-radius: 6px;
+                                    background: cta2.has-hover ? Theme.hover : Theme.surface;
+                                    border-width: i == 0 ? 2px : 0px; border-color: Theme.accent;
+                                    accessible-role: button; accessible-label: "Alternative " + (i + 1) + ": " + c;
+                                    Text { text: c; color: Theme.text; font-size: 22px * Theme.scale; horizontal-alignment: center; vertical-alignment: center; }
+                                    cta2 := TouchArea { clicked => { root.choose(i); } }
+                                }
+                            }
+                        }
+                    }
+                    // ---- pen tray: floating, collapsible
+                    if root.new-editor && !root.present-mode && !root.focus-mode && !root.tray-open : ToolButton {
+                        x: parent.width - self.width - 12px; y: parent.height - self.height - 12px;
+                        label: "✎ Draw"; tip: "Show the pen tray"; active: root.tool != "textbox";
+                        clicked => { root.tray-open = true; }
+                    }
+                    if root.new-editor && !root.present-mode && !root.focus-mode && root.tray-open : tray := Rectangle {
+                        width: min(parent.width - 16px, 560px * Theme.scale);
+                        height: Theme.hit + 14px * Theme.scale;
+                        x: (parent.width - self.width) / 2;
+                        y: parent.height - self.height - 10px;
+                        border-radius: 12px; background: Theme.panel; border-width: 1px; border-color: Theme.muted;
+                        TouchArea { }
+                        ScrollRow {
+                            pad: 7px * Theme.scale;
+                            ToolButton { label: "Aa"; tip: "Type text (the text cursor)"; active: root.tool == "textbox"; clicked => { root.set-tool("textbox"); } }
+                            ToolButton { label: "Pen"; active: root.tool == "pen"; clicked => { root.set-tool("pen"); } }
+                            ToolButton { label: "Marker"; tip: "Highlighter"; active: root.tool == "highlighter"; clicked => { root.set-tool("highlighter"); } }
+                            ToolButton { label: "Eraser"; active: root.tool == "eraser"; clicked => { root.set-tool("eraser"); } }
+                            ToolButton { label: "Lasso"; tip: "Circle ink to select and move it"; active: root.tool == "lasso"; clicked => { root.set-tool("lasso"); } }
+                            Rectangle {
+                                width: Theme.hit; height: Theme.hit; border-radius: self.width / 2;
+                                background: root.current-color; border-width: root.tray-panel == "colors" ? 3px : 1px; border-color: root.tray-panel == "colors" ? Theme.accent : Theme.muted;
+                                accessible-role: button; accessible-label: "Pen colour";
+                                TouchArea { clicked => { root.tray-panel = root.tray-panel == "colors" ? "" : "colors"; } }
+                            }
+                            ToolButton { label: "⚙"; tip: "Pen settings"; active: root.tray-panel == "settings"; clicked => { root.tray-panel = root.tray-panel == "settings" ? "" : "settings"; } }
+                            ToolButton { label: "✕"; tip: "Hide the pen tray"; clicked => { root.tray-open = false; root.tray-panel = ""; } }
+                        }
+                    }
+                    if root.new-editor && root.tray-open && root.tray-panel != "" && !root.present-mode && !root.focus-mode : Rectangle {
+                        width: min(parent.width - 16px, 560px * Theme.scale);
+                        height: min(parent.height - 100px * Theme.scale, pop-col.preferred-height + 16px);
+                        x: (parent.width - self.width) / 2;
+                        y: parent.height - (Theme.hit + 14px * Theme.scale) - 10px - self.height - 6px;
+                        border-radius: 12px; background: Theme.panel; border-width: 1px; border-color: Theme.muted;
+                        TouchArea { }
+                        ScrollView {
+                            pop-col := VerticalLayout {
+                                padding: 8px; spacing: 6px;
+                                alignment: start;
+                                if root.tray-panel == "colors" : ScrollRow {
+                                    pad: 0px;
+                                    for c[i] in root.swatches : Rectangle {
+                                        width: Theme.hit; height: Theme.hit; border-radius: self.width / 2;
+                                        background: rgb(c.r, c.g, c.b);
+                                        border-width: c.active ? 3px : 1px; border-color: c.active ? Theme.accent : Theme.muted;
+                                        accessible-role: button; accessible-label: "Colour " + (i + 1);
+                                        TouchArea { clicked => { root.set-swatch(i); } }
+                                    }
+                                    ToolButton { label: "+ Colour"; clicked => { root.overlay = "colors"; } }
+                                    for p[i] in root.pens : Rectangle {
+                                        width: Theme.hit * 1.6; height: Theme.hit; border-radius: 6px;
+                                        background: i == root.active-pen ? Theme.accent : Theme.surface;
+                                        accessible-role: button; accessible-label: "Favourite pen " + (i + 1);
+                                        HorizontalLayout {
+                                            padding: 6px; spacing: 4px;
+                                            Rectangle { width: 18px * Theme.scale; height: 18px * Theme.scale; y: (parent.height - self.height) / 2; border-radius: 9px * Theme.scale; background: rgb(p.r, p.g, p.b); }
+                                            Text { text: "Pen " + (i + 1); color: i == root.active-pen ? Theme.on-accent : Theme.text; font-size: Theme.fs-small; vertical-alignment: center; }
+                                        }
+                                        TouchArea { clicked => { root.use-pen(i); } }
+                                    }
+                                }
+                                if root.tray-panel == "settings" : VerticalLayout {
+                                    spacing: 6px;
+                                    BigSlider { label: "Width"; display: Math.round(root.stroke-width * 10) / 10; value: root.stroke-width; minimum: 0.5; maximum: 24; step: 0.5; track-width: 160px * Theme.scale; changed(v) => { root.set-width(v); } }
+                                    BigSlider { label: "Smoothing"; display: Math.round(root.smoothing * 100) + "%"; value: root.smoothing; minimum: 0; maximum: 1; step: 0.05; track-width: 160px * Theme.scale; changed(v) => { root.set-smoothing(v); } }
+                                    BigSlider { label: "Suggest after"; display: Math.round(root.recog-delay) + " ms"; value: root.recog-delay; minimum: 200; maximum: 3000; step: 100; track-width: 160px * Theme.scale; changed(v) => { root.set-delay(v); } }
+                                    Text { text: "Handwriting becomes"; color: Theme.muted; font-size: Theme.fs-small; }
+                                    HorizontalLayout {
+                                        spacing: 4px; alignment: start;
+                                        ToolButton { label: "Math"; active: root.mode == "math"; clicked => { root.set-mode("math"); } }
+                                        ToolButton { label: "Words"; active: root.mode == "text"; clicked => { root.set-mode("text"); } }
+                                        ToolButton { label: "Drawing"; tip: "Keep it as a drawing; lines, circles and boxes snap"; active: root.mode == "drawing"; clicked => { root.set-mode("drawing"); } }
+                                    }
+                                    if root.tool == "eraser" : ToolButton { label: root.pixel-erase ? "Eraser: part of a stroke" : "Eraser: whole stroke"; clicked => { root.toggle-pixel-erase(); } }
+                                }
+                            }
+                        }
+                    }
                     if root.focus-mode || root.present-mode : ToolButton { x: parent.width - self.width - 8px; y: 8px; label: "Exit (Esc)"; clicked => { root.run-command(root.present-mode ? "present" : "focus"); } }
                 }
                 // page document: typeset blocks, editor, outline, backlinks
-                if (root.tiny ? root.doc-on-narrow : root.show-doc) && !root.graph-mode : Rectangle {
+                if (root.tiny ? root.doc-on-narrow : root.show-doc) && !root.graph-mode && !root.new-editor : Rectangle {
                     width: root.tiny || (root.present-mode && root.split-active == false && root.focus-mode == false && false) ? root.win-w : root.doc-w;
                     background: Theme.panel;
                     VerticalLayout {
@@ -920,6 +1247,41 @@ export component MainWindow inherits Window {
                 height: 28px * Theme.scale;
                 Text { x: 10px; text: root.status; color: Theme.accent; vertical-alignment: center; font-size: Theme.fs-small; overflow: elide; width: parent.width - 20px; }
             }
+        }
+    }
+
+    // ---------------------------------------------------------------- slide-over notes drawer and menus
+    if root.new-editor && root.narrow && root.drawer-open && !root.present-mode && !root.focus-mode : Rectangle {
+        x: 0; y: Theme.hit + 16px * Theme.scale;
+        width: root.win-w; height: root.win-h - self.y;
+        background: #00000070;
+        TouchArea { clicked => { root.drawer-open = false; } }
+        SidebarPanel {
+            x: 0; y: 0;
+            width: min(330px * Theme.scale, root.win-w * 0.88);
+            height: parent.height;
+            rows: root.pages; results: root.search-results; search-active: root.search-active;
+            notebooks: root.notebooks; notebook-index: root.notebook-index; filter-index: root.filter-index;
+            drag-data: root.drag-data; drag-src <=> root.drag-src;
+            open-page(id) => { root.open-page(id); root.drawer-open = false; }
+            do-search(t) => { root.do-search(t); }
+            set-notebook(i) => { root.set-notebook(i); }
+            set-filter(i) => { root.set-filter(i); }
+            move-row(id, d) => { root.move-row(id, d); }
+            drop-row(a, b) => { root.drop-row(a, b); }
+            command(c) => { root.run-command(c); if c == "new-page" { root.drawer-open = false; } }
+        }
+    }
+    if root.menu != "" : Rectangle {
+        x: 0; y: Theme.hit + 16px * Theme.scale;
+        width: root.win-w; height: root.win-h - self.y;
+        TouchArea { clicked => { root.menu = ""; fs.focus(); } }
+        MenuCard {
+            x: root.win-w - self.width - 8px;
+            y: 2px;
+            avail-h: parent.height - 12px;
+            items: root.menu-items;
+            pick(id) => { root.menu = ""; root.run-command(id); fs.focus(); }
         }
     }
 
