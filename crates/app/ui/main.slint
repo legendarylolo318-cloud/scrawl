@@ -344,6 +344,7 @@ export component MainWindow inherits Window {
     in property <bool> fmt-italic: false;
     in property <bool> fmt-underline: false;
     in property <string> para-kind: "";
+    in property <string> obj-kind: "";
     in property <bool> doc-can-undo: false;
     in property <bool> doc-can-redo: false;
     in-out property <bool> tray-open: true;
@@ -615,8 +616,23 @@ export component MainWindow inherits Window {
                     if !root.tiny : ToolButton { label: "Find"; tip: "Find anything (Ctrl+K)"; clicked => { root.run-command("palette"); } }
                 }
             }
+            // ---- selected image / plot / math object
+            if root.new-editor && root.tool == "textbox" && root.obj-kind != "" && !root.focus-mode && !root.present-mode : Rectangle {
+                background: Theme.panel;
+                height: Theme.hit + 12px * Theme.scale;
+                ScrollRow {
+                    Text { text: root.obj-kind == "image" ? "Image" : root.obj-kind == "math" ? "Math" : root.obj-kind == "plot" ? "Plot" : "Object"; color: Theme.muted; vertical-alignment: center; font-size: Theme.fs-small; }
+                    if root.obj-kind == "image" : ToolButton { label: "Smaller"; clicked => { root.run-command("obj-smaller"); } }
+                    if root.obj-kind == "image" : ToolButton { label: "Larger"; clicked => { root.run-command("obj-larger"); } }
+                    if root.obj-kind == "image" : ToolButton { label: "Trim edges"; tip: "Cut 5% from every side (repeat for more)"; clicked => { root.run-command("obj-crop"); } }
+                    if root.obj-kind == "image" : ToolButton { label: "Restore"; clicked => { root.run-command("obj-uncrop"); } }
+                    if root.obj-kind == "math" : ToolButton { label: "Copy LaTeX"; clicked => { root.run-command("obj-copy-latex"); } }
+                    if root.obj-kind == "math" : ToolButton { label: "Copy Typst"; clicked => { root.run-command("obj-copy-typst"); } }
+                    ToolButton { label: "Delete"; urgent: true; clicked => { root.run-command("obj-delete"); } }
+                }
+            }
             // ---- formatting bar: only while the text cursor is the tool
-            if root.new-editor && root.tool == "textbox" && !root.focus-mode && !root.present-mode && !root.short : Rectangle {
+            if root.new-editor && root.tool == "textbox" && root.obj-kind == "" && !root.focus-mode && !root.present-mode && !root.short : Rectangle {
                 background: Theme.panel;
                 height: Theme.hit + 12px * Theme.scale;
                 ScrollRow {
@@ -1318,11 +1334,11 @@ export component MainWindow inherits Window {
             }
         }
     }
-    if root.overlay == "switcher" || root.overlay == "trash" || root.overlay == "history" || root.overlay == "backups" || root.overlay == "split-pick" : Modal {
-        title: root.overlay == "switcher" ? "Go to page" : root.overlay == "trash" ? "Trash (pages are kept 30 days)" : root.overlay == "history" ? "Version history" : root.overlay == "backups" ? "Backups" : "Show which page beside this one?";
+    if root.overlay == "switcher" || root.overlay == "outline" || root.overlay == "trash" || root.overlay == "history" || root.overlay == "backups" || root.overlay == "split-pick" : Modal {
+        title: root.overlay == "switcher" ? "Go to page" : root.overlay == "outline" ? "Outline" : root.overlay == "trash" ? "Trash (pages are kept 30 days)" : root.overlay == "history" ? "Version history" : root.overlay == "backups" ? "Backups" : "Show which page beside this one?";
         card-h: 600px;
         close => { root.close-overlay(); }
-        if root.overlay == "switcher" || root.overlay == "split-pick" : LineEdit {
+        if root.overlay == "switcher" || root.overlay == "split-pick" || root.overlay == "outline" : LineEdit {
             height: Theme.hit;
             placeholder-text: "Page title";
             init => { self.focus(); }

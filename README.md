@@ -1,13 +1,14 @@
 # Scrawl
 
-Handwritten-math notes in pure Rust + [Slint](https://slint.dev). Draw with a mouse, trackpad, pen
-tablet, or an iPad/Android device; Scrawl recognizes each symbol and typesets it. Typing is fully
-supported and mixes freely with drawing. Linux and Windows. No Chromium, no webview.
+A calm note-taking app in pure Rust + [Slint](https://slint.dev), good at handwriting and handwritten math.
+Type like in a word processor, or write and draw with a mouse, trackpad, pen tablet or a phone/tablet; Scrawl can turn
+handwriting into text or typeset math in place. Linux and Windows. No Chromium, no webview.
 
-> **Status: work in progress.** The core crates are implemented and tested, but the desktop UI does
-> not expose everything yet (rich-text editing, tags, lasso, tabs, a command palette and more are
-> missing or library-only). [`REVIEW_NOTES.md`](REVIEW_NOTES.md) lists exactly what works, what is partial
-> and what is missing. Builds and releases have not been tested on Windows yet.
+> **Status: the page is now one document.** Type like in a word processor and draw or write by hand on the same
+> page. See [`docs/ui-redesign.md`](docs/ui-redesign.md) for the design and [`CHANGELOG.md`](CHANGELOG.md). Some items
+> are still open (see `HANDOFF.md`); Windows builds are CI-tested but not hand-tested.
+
+![Scrawl: document page with the formatting bar and pen tray](docs/screenshots/new-1500x900-dark.png)
 
 ## What works today
 

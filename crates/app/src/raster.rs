@@ -78,7 +78,7 @@ fn draw_stroke(pm: &mut Pixmap, s: &Stroke, view: View, px_scale: f32, light: bo
     let mut paint = Paint::default();
     let [r, g, b, a] = s.color;
     // Near-white ink (the dark theme's default pen) is drawn dark on light paper, and vice versa.
-    let (r, g, b) = if light && r > 200 && g > 200 && b > 200 { (0x1f, 0x23, 0x35) } else if !light && r < 50 && g < 50 && b < 60 { (0xc0, 0xca, 0xf5) } else { (r, g, b) };
+    let (r, g, b) = if light && r > 180 && g > 180 && b > 180 { (0x1f, 0x23, 0x35) } else if !light && r < 50 && g < 50 && b < 60 { (0xc0, 0xca, 0xf5) } else { (r, g, b) };
     paint.set_color(Color::from_rgba8(r, g, b, a));
     paint.anti_alias = true;
     let width = match s.kind {

@@ -122,6 +122,17 @@ cmds! {
     "fmt-link", "Link text to a page or web address", "", "Text";
     "insert-table", "Insert a table", "", "Page";
     "chip-dismiss", "Keep handwriting as ink (dismiss the suggestion)", "", "Ink";
+    "outline", "Outline of this page (headings)", "", "Page";
+    "word-count", "Word count", "", "Page";
+    "today", "Open today's note", "", "Notes";
+    "quick-note", "Quick note: a new blank page", "ctrl+shift+n", "Notes";
+    "obj-smaller", "Object: smaller", "", "Object";
+    "obj-larger", "Object: larger", "", "Object";
+    "obj-crop", "Image: trim the edges", "", "Object";
+    "obj-uncrop", "Image: restore the edges", "", "Object";
+    "obj-copy-latex", "Math: copy as LaTeX", "", "Object";
+    "obj-copy-typst", "Math: copy as Typst", "", "Object";
+    "obj-delete", "Delete the selected object", "", "Object";
     "tablet", "Tablet panel", "", "Tablet";
 }
 

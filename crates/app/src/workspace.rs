@@ -93,7 +93,8 @@ impl Workspace {
         self.page = match pick.and_then(|id| self.store.load_page(&self.nb.id, &id, &self.vault).ok()) {
             Some(p) => p,
             None => {
-                let p = self.store.page_from_template("lecture notes", store::now_ms()).unwrap_or_else(|| Page::new(&store::new_id(), "Untitled", &store::iso_date(store::now_ms())));
+                let first_launch = self.nb.name == "My notebook";
+                let p = if first_launch { Some(welcome_page(store::now_ms())) } else { self.store.page_from_template("lecture notes", store::now_ms()) }.unwrap_or_else(|| Page::new(&store::new_id(), "Untitled", &store::iso_date(store::now_ms())));
                 let sec = self.nb.sections[0].id.clone();
                 self.store.create_page(&mut self.nb, &sec, p.clone(), &self.vault)?;
                 p
@@ -790,5 +791,46 @@ mod tests {
         assert_eq!(ws.page.title, "edited elsewhere with a longer title");
         assert!(!ws.changed_on_disk());
         std::fs::remove_dir_all(d).ok();
+    }
+}
+
+/// The first page a new user sees: how to type, how to draw, how handwriting becomes text.
+pub fn welcome_page(now: u64) -> Page {
+    use notedoc::{ParaKind as K, Run};
+    let mut p = Page::new(&store::new_id(), "Welcome to Scrawl", &store::iso_date(now));
+    let mut d = notedoc::Doc::new();
+    let t = |d: &mut notedoc::Doc, k: K, s: &str| {
+        d.push(k, vec![Run::plain(s)]);
+    };
+    t(&mut d, K::Body, "This is an ordinary page. Click anywhere and type; Enter starts a new paragraph.");
+    t(&mut d, K::Heading(2), "Type");
+    t(&mut d, K::Bullet { indent: 0 }, "Start a line with - for bullets, 1. for numbers, [] for a checklist, # for a heading.");
+    t(&mut d, K::Bullet { indent: 0 }, "Select text and use the bar above, or Ctrl+B and Ctrl+I.");
+    d.push(K::Bullet { indent: 0 }, vec![Run::plain("Put math inside a sentence with dollar signs: "), Run::Math { typst: "x^2 + 1".into() }, Run::plain(".")]);
+    t(&mut d, K::Heading(2), "Draw and write by hand");
+    t(&mut d, K::Bullet { indent: 0 }, "Tap Pen at the bottom and write or sketch anywhere. Ink stays beside the text it was written next to.");
+    t(&mut d, K::Bullet { indent: 0 }, "Write words or math and pause: a suggestion appears. Accept turns it into typed text or a formula; Keep ink leaves it as handwriting.");
+    t(&mut d, K::Bullet { indent: 0 }, "Tap Aa to go back to typing.");
+    t(&mut d, K::Heading(2), "Find things");
+    t(&mut d, K::Check { done: false }, "Try + Insert for images, tables, callouts and graphs.");
+    t(&mut d, K::Check { done: false }, "The ... menu has everything else. Ctrl+K finds any command.");
+    d.push(K::Body, vec![]);
+    p.doc = Some(d);
+    p.sync_blocks();
+    p
+}
+
+#[cfg(test)]
+mod welcome_tests {
+    use super::*;
+
+    #[test]
+    fn welcome_page_has_a_document_and_matching_blocks() {
+        let p = welcome_page(1_700_000_000_000);
+        let d = p.doc.as_ref().unwrap();
+        assert!(d.paras.len() >= 10);
+        assert!(!p.blocks.is_empty(), "blocks are kept in sync for export and search");
+        assert!(p.to_typst().contains("Draw and write by hand"));
+        assert!(d.plain_text().contains("Ctrl+K"));
     }
 }

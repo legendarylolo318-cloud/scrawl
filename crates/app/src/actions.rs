@@ -283,6 +283,31 @@ pub fn shortcut(ui: &MainWindow, s: &mut State, key: &str, ctrl: bool, alt: bool
 pub fn run(ui: &MainWindow, s: &mut State, id: &str) {
     let now = s.now_ms();
     match id {
+        "outline" => {
+            open_overlay(ui, s, "outline");
+            overlay_query(ui, s, "");
+            return;
+        }
+        "word-count" => {
+            let msg = match s.ws.as_ref().and_then(|w| w.page.doc.as_ref()) {
+                Some(d) => {
+                    let text = d.plain_text();
+                    format!("{} words, {} characters on this page", text.split_whitespace().count(), text.chars().filter(|c| !c.is_whitespace()).count())
+                }
+                None => "No text on this page yet".to_string(),
+            };
+            s.set_status(msg);
+            return;
+        }
+        "quick-note" => {
+            new_page(s, "blank");
+            return;
+        }
+        "today" => {
+            let today = store::iso_date(store::now_ms());
+            follow_link(s, &today);
+            return;
+        }
         "fmt-math" => {
             ask(ui, s, Prompt::InlineMath, "Inline math", "Type math in Typst or LaTeX, for example x^2 + 1 or \\frac{a}{b}", false);
             return;
@@ -299,6 +324,9 @@ pub fn run(ui: &MainWindow, s: &mut State, id: &str) {
         _ => {}
     }
     if docedit::command(s, id) {
+        return;
+    }
+    if id.starts_with("obj-") && docedit::object_command(s, id) {
         return;
     }
     match id {
@@ -985,6 +1013,28 @@ pub fn overlay_query(ui: &MainWindow, s: &mut State, q: &str) {
             ui.set_items_hint("".into());
             ui.set_items(model(rows));
         }
+        "outline" => {
+            let ql = q.to_lowercase();
+            let rows: Vec<ItemRow> = s
+                .ws
+                .as_ref()
+                .and_then(|w| w.page.doc.as_ref())
+                .map(|d| {
+                    d.paras
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, p)| match p.kind {
+                            notedoc::ParaKind::Heading(l) => Some((i, l, p.plain())),
+                            _ => None,
+                        })
+                        .filter(|(_, _, t)| t.to_lowercase().contains(&ql))
+                        .map(|(i, l, t)| item(i.to_string(), format!("{}{}", "    ".repeat(l.saturating_sub(1) as usize), t), String::new()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            ui.set_items_hint(if rows.is_empty() { "No headings yet: make one with H1 or by typing # at the start of a line.".into() } else { "".into() });
+            ui.set_items(model(rows));
+        }
         "symbols" => {
             let hits = symbols::filter(&s.symbol_rows, q);
             ui.set_symbols(model(hits.iter().map(|x| SymRow { sym: x.display.as_str().into(), name: x.name.as_str().into() }).collect()));
@@ -1015,6 +1065,12 @@ pub fn overlay_pick(ui: &MainWindow, s: &mut State, id: &str) {
         "palette" => {
             close_overlay(ui, s);
             run(ui, s, id);
+        }
+        "outline" => {
+            close_overlay(ui, s);
+            if let Ok(i) = id.parse::<usize>() {
+                docedit::goto_para(s, i);
+            }
         }
         "switcher" => {
             close_overlay(ui, s);
@@ -1702,4 +1758,24 @@ pub fn textbox_finish(s: &mut State, text: &str, next_line: bool) {
         s.textbox = Some((None, x, y + line));
     }
     s.dirty |= dirty::TOOLS;
+}
+
+/// Follow a `[[link]]`; a link to a page that does not exist yet creates it.
+pub fn follow_link(s: &mut State, title: &str) {
+    let target = s.ws.as_ref().and_then(|w| w.page_by_title(title));
+    match target {
+        Some(t) => {
+            if let Err(e) = s.goto_page(&t, true) {
+                s.set_status(e);
+            }
+        }
+        None => {
+            new_page(s, "blank");
+            if let Some(w) = &mut s.ws {
+                w.rename(title);
+            }
+            s.set_status(format!("Created the linked page \"{title}\""));
+            s.dirty |= dirty::SIDEBAR | dirty::TABS;
+        }
+    }
 }

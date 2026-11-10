@@ -1,5 +1,29 @@
 # Changelog
 
+## UI redesign (unreleased)
+
+### Changed
+- **One page that types like a word processor and takes ink.** The side "Page" panel, the typed-text box and
+  the floating canvas text boxes are gone from the main screen. Click anywhere in the text and type: caret,
+  wrapping, Enter/Backspace paragraphs, arrows, Home/End, Shift and mouse selection, double and triple click,
+  Ctrl+B/I/U, cut/copy/paste, undo/redo, lists (`- `, `1. `, `[] `), headings (`# `), quotes, links and inline
+  math (`$x^2$`). No markup is shown; Typst stays the storage and export format.
+- **Calm layout.** Three toolbar rows (113 buttons, 11 sliders) became a slim top bar (notes, back/forward, title,
+  undo/redo, + Insert, Share, ⋯, Find), a formatting bar that only shows while typing, a floating pen tray with
+  the pen settings in a pop-over, and a handwriting suggestion chip next to the ink. Narrow windows get a
+  slide-over notes drawer.
+- Ink draws over the text and follows the paragraph it was written next to. Accepting a handwriting
+  suggestion puts typed text or a formula into the page at that spot.
+- Lined paper is shown blank in the document view (rules would not line up with text).
+
+### Added
+- `notedoc` crate (document model, Typst conversion, editing rules) and `docview` crate (cosmic-text layout,
+  hit-testing, rendering). Pages open in the new model automatically; the old version of the page is first saved
+  in the page history. Old pages keep every block and canvas text.
+- Checklists, outline of headings, word count, today's note, quick note, welcome page for new users,
+  selected-object bar for images/plots/math (smaller, larger, trim, copy LaTeX, delete).
+- Set `SCRAWL_OLD_EDITOR=1` to start with the previous layout (temporary).
+
 ## Unreleased (0.1.0 in progress)
 
 ### Added

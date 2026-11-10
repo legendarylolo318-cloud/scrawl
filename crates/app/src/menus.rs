@@ -70,6 +70,8 @@ pub const MORE: &[Item] = items! {
     ]
     "This page" => [
         "favorite", "Pin or unpin", "Ctrl+D";
+        "outline", "Outline", "";
+        "word-count", "Word count", "";
         "find", "Find and replace", "Ctrl+F";
         "duplicate", "Duplicate", "";
         "history", "Version history", "";
@@ -80,6 +82,8 @@ pub const MORE: &[Item] = items! {
     ]
     "Notes" => [
         "switcher", "Go to page…", "Ctrl+P";
+        "quick-note", "Quick note", "Ctrl+Shift+N";
+        "today", "Today's note", "";
         "trash", "Trash", "";
         "new-section", "New section", "";
         "new-notebook", "New notebook", "";
@@ -109,7 +113,7 @@ pub const MORE: &[Item] = items! {
 #[cfg_attr(not(test), allow(dead_code))]
 pub const ELSEWHERE: &[&str] = &[
     "pen", "highlighter", "eraser", "lasso", "pen1", "pen2", "pen3", "mode-text", "mode-drawing", "textbox", "undo", "redo", "delete-selection", "recognize", "insert", "chip-dismiss",
-    "fmt-body", "fmt-h3", "fmt-bold", "fmt-italic", "fmt-underline", "fmt-indent", "fmt-outdent", "toggle-sidebar", "back", "forward", "new-page", "search",
+    "obj-smaller", "obj-larger", "obj-crop", "obj-uncrop", "obj-copy-latex", "obj-copy-typst", "obj-delete", "fmt-body", "fmt-h3", "fmt-bold", "fmt-italic", "fmt-underline", "fmt-indent", "fmt-outdent", "toggle-sidebar", "back", "forward", "new-page", "search",
 ];
 
 /// Reachable from the command palette (Ctrl+K) and their own screens only, on purpose.

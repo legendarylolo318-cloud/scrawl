@@ -1,5 +1,28 @@
 # Scrawl handoff
 
+## UI redesign status (read this first)
+
+See `docs/ui-redesign.md` (plan) and `CHANGELOG.md`. Built: `crates/doc` (package `notedoc`: model, Typst conversion,
+editing rules, tests), `crates/docview` (cosmic-text layout, caret/selection geometry, rendering), `crates/app/src/docedit.rs`
+(keyboard, mouse, clipboard, undo, ink anchors, insert), `menus.rs`, new chrome in `main.slint`.
+
+Done: document model + lossless migration (old page saved to history first), typing/selection/formatting, lists, checklists,
+inline math, links (click opens page), ink over text anchored to paragraphs, handwriting chip + accept in place,
+calm top bar/formatting bar/pen tray/sidebar/drawer/menus, welcome page, outline, word count, today/quick note, object bar.
+
+Not done / known gaps:
+- IME composition (CJK) in the document: Slint offers it only in its own text widgets. Use the paste box.
+- Handwriting mode is not auto-detected: choose Math / Words / Drawing in the pen settings (⚙).
+- Math objects cannot be edited in place yet (delete and re-insert, or edit via copy LaTeX); no resize handles, only
+  Smaller/Larger buttons; Shift+click selection and drag-selecting by word are missing; ink undo and text undo are
+  separate stacks (text first).
+- Pages are not auto-sorted; no sort option. Back-links are computed (`pagedoc::links`) but not shown under the page.
+- The old toolbars, `Block` text panel and `textbox_*` canvas text code still exist (`SCRAWL_OLD_EDITOR=1`); delete them
+  once the owner is happy. Legacy scenes (`typehere`, `justtype`, `text`) need `SCRAWL_OLD_EDITOR=1`.
+- Only checked off-screen: no real dragging, hover, pen pressure, caret blink or IME. See the manual checklist in the
+  final summary of the redesign task.
+
+
 Snapshot of the review/finish/release work, so it can be picked up later. The original task brief is
 in `REVIEWER_PROMPT.md` (untracked). Read `REVIEW_NOTES.md` for the older checklist; this file
 supersedes it where they disagree.

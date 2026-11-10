@@ -131,11 +131,13 @@ pub struct EditState {
     pub dragging: bool,
     pub click: Option<(Instant, f32, f32, u8)>,
     pub caret_on: bool,
+    /// The last mouse press has not moved (a click, not a drag-select).
+    pub press_was_click: bool,
 }
 
 impl Default for EditState {
     fn default() -> Self {
-        Self { sel: Sel::default(), undo: vec![], redo: vec![], pending: None, last_kind: "", goal_x: None, dragging: false, click: None, caret_on: true }
+        Self { sel: Sel::default(), undo: vec![], redo: vec![], pending: None, last_kind: "", goal_x: None, dragging: false, click: None, caret_on: true, press_was_click: false }
     }
 }
 
@@ -194,7 +196,7 @@ pub fn scroll_to_caret(s: &mut State) {
     if s.view.oy > 0.0 {
         s.view.oy = 0.0;
     }
-    s.dirty |= dirty::CANVAS;
+    s.dirty |= dirty::CANVAS | dirty::TOOLS;
 }
 
 fn doc_mut(s: &mut State) -> Option<(&mut Doc, &mut EditState)> {
@@ -211,7 +213,7 @@ fn set_sel(s: &mut State, head: Pos, extend: bool) {
     ed.pending = None;
     ed.last_kind = "";
     ed.caret_on = true;
-    s.dirty |= dirty::CANVAS;
+    s.dirty |= dirty::CANVAS | dirty::TOOLS;
     scroll_to_caret(s);
 }
 
@@ -374,7 +376,7 @@ pub fn key(s: &mut State, text: &str, ctrl: bool, alt: bool, shift: bool, meta: 
             if let Some(sel) = with_doc(s, notedoc::select_all) {
                 s.dedit.ed.sel = sel;
             }
-            s.dirty |= dirty::CANVAS;
+            s.dirty |= dirty::CANVAS | dirty::TOOLS;
         }
         "ctrl+c" => {
             if let Some(t) = copy_text(s) {
@@ -468,6 +470,14 @@ pub fn pointer_down(s: &mut State, x: f32, y: f32) -> bool {
         _ => 1,
     };
     s.dedit.ed.click = Some((now, x, y, count));
+    // a click on an image, plot or display math selects that object
+    if s.ws.as_ref().and_then(|w| w.page.doc.as_ref()).and_then(|d| d.paras.get(pos.para)).is_some_and(|p| !p.kind.is_text()) {
+        s.dedit.ed.sel = Sel { anchor: Pos { para: pos.para, off: 0 }, head: Pos { para: pos.para, off: 1 } };
+        s.dedit.ed.dragging = false;
+        s.dedit.ed.press_was_click = false;
+        s.dirty |= dirty::CANVAS | dirty::TOOLS;
+        return true;
+    }
     let sel = match count {
         2 => s.ws.as_ref().and_then(|w| w.page.doc.as_ref()).map(|d| notedoc::word_range(d, pos)).map(|(a, b)| Sel { anchor: a, head: b }),
         3 => s.ws.as_ref().and_then(|w| w.page.doc.as_ref()).map(|d| notedoc::para_range(d, pos)).map(|(a, b)| Sel { anchor: a, head: b }),
@@ -477,11 +487,12 @@ pub fn pointer_down(s: &mut State, x: f32, y: f32) -> bool {
         s.dedit.ed.sel = sel;
     }
     s.dedit.ed.dragging = count == 1;
+    s.dedit.ed.press_was_click = count == 1;
     s.dedit.ed.pending = None;
     s.dedit.ed.last_kind = "";
     s.dedit.ed.goal_x = None;
     s.dedit.ed.caret_on = true;
-    s.dirty |= dirty::CANVAS;
+    s.dirty |= dirty::CANVAS | dirty::TOOLS;
     true
 }
 
@@ -491,8 +502,11 @@ pub fn pointer_move(s: &mut State, x: f32, y: f32) -> bool {
     }
     let (lx, ly) = doc_point(s, x, y);
     if let Some(pos) = s.dedit.layout.hit(lx, ly) {
+        if pos != s.dedit.ed.sel.anchor {
+            s.dedit.ed.press_was_click = false;
+        }
         s.dedit.ed.sel.head = pos;
-        s.dirty |= dirty::CANVAS;
+        s.dirty |= dirty::CANVAS | dirty::TOOLS;
         scroll_to_caret(s);
     }
     true
@@ -501,6 +515,12 @@ pub fn pointer_move(s: &mut State, x: f32, y: f32) -> bool {
 pub fn pointer_up(s: &mut State) -> bool {
     let was = s.dedit.ed.dragging;
     s.dedit.ed.dragging = false;
+    if was {
+        if let Some(title) = link_clicked(s) {
+            s.dedit.ed.press_was_click = false;
+            crate::actions::follow_link(s, &title);
+        }
+    }
     was
 }
 
@@ -749,4 +769,93 @@ pub fn link_selection(s: &mut State, target: &str) {
         }
     }
     after_edit(s);
+}
+
+// ---- objects (images, plots, display math) and links ---------------------------------------------
+
+/// The paragraph index of the selected object, if the selection is exactly one object.
+pub fn selected_object(s: &State) -> Option<usize> {
+    let doc = s.ws.as_ref()?.page.doc.as_ref()?;
+    let (a, b) = s.dedit.ed.sel.ordered();
+    let p = doc.paras.get(a.para)?;
+    (a.para == b.para && a.off == 0 && b.off == 1 && !p.kind.is_text()).then_some(a.para)
+}
+
+/// "image" | "math" | "plot" | "other" | "" for the contextual object bar.
+pub fn object_kind(s: &State) -> &'static str {
+    let Some(i) = selected_object(s) else { return "" };
+    match s.ws.as_ref().and_then(|w| w.page.doc.as_ref()).and_then(|d| d.paras.get(i)).map(|p| &p.kind) {
+        Some(ParaKind::Image { .. }) => "image",
+        Some(ParaKind::MathDisplay { .. }) => "math",
+        Some(ParaKind::Plot { .. }) => "plot",
+        _ => "other",
+    }
+}
+
+pub fn object_command(s: &mut State, id: &str) -> bool {
+    let Some(i) = selected_object(s) else { return false };
+    snapshot(s, "");
+    let mut copy: Option<String> = None;
+    if let Some((doc, ed)) = doc_mut(s) {
+        match (id, &mut doc.paras[i].kind) {
+            ("obj-smaller" | "obj-larger", ParaKind::Image { w, h, .. }) => {
+                let k = if id == "obj-larger" { 1.18 } else { 0.85 };
+                *w = (*w * k).clamp(30.0, 2000.0);
+                *h = (*h * k).clamp(30.0, 2000.0);
+            }
+            ("obj-crop", ParaKind::Image { crop, .. }) => {
+                let c = crop.unwrap_or([0.0; 4]);
+                *crop = Some(c.map(|v| (v + 0.05).min(0.4)));
+            }
+            ("obj-uncrop", ParaKind::Image { crop, .. }) => *crop = None,
+            ("obj-copy-latex", ParaKind::MathDisplay { expr, source }) => copy = Some(if expr.is_empty() { source.clone().unwrap_or_default() } else { expr.to_latex() }),
+            ("obj-copy-typst", ParaKind::MathDisplay { expr, source }) => copy = Some(if expr.is_empty() { source.clone().unwrap_or_default() } else { expr.to_typst() }),
+            ("obj-delete", _) => {
+                notedoc::delete_range(doc, Pos { para: i, off: 0 }, Pos { para: i, off: 1 });
+                ed.sel = Sel::caret(notedoc::clamp(doc, Pos { para: i, off: 0 }));
+            }
+            _ => {}
+        }
+    }
+    if let Some(t) = copy {
+        let _ = crate::actions::clipboard_text(&t);
+        s.set_status("Copied");
+    }
+    after_edit(s);
+    true
+}
+
+/// The page link under a click, if the click is inside the linked text (not at its edges).
+fn page_link_at(s: &State, pos: Pos) -> Option<String> {
+    let doc = s.ws.as_ref()?.page.doc.as_ref()?;
+    let p = doc.paras.get(pos.para)?;
+    let mut at = 0;
+    for r in &p.runs {
+        let len = notedoc::run_len(r);
+        if let notedoc::Run::Text { link: Some(notedoc::Link::Page(t)), .. } = r {
+            if pos.off > at && pos.off < at + len {
+                return Some(t.clone());
+            }
+        }
+        at += len;
+    }
+    None
+}
+
+/// Call on mouse release: a plain click inside a `[[link]]` opens that page. Returns the title.
+pub fn link_clicked(s: &State) -> Option<String> {
+    let sel = s.dedit.ed.sel;
+    if !sel.is_caret() || !matches!(s.dedit.ed.click, Some((_, _, _, 1))) || !s.dedit.ed.press_was_click {
+        return None;
+    }
+    page_link_at(s, sel.head)
+}
+
+/// Put the caret at the start of paragraph `i` and scroll it to the top of the page view.
+pub fn goto_para(s: &mut State, i: usize) {
+    relayout(s);
+    let Some(it) = s.dedit.layout.items.get(i) else { return };
+    s.dedit.ed.sel = Sel::caret(Pos { para: i, off: 0 });
+    s.view.oy = (-(it.top + MARGIN_Y - 16.0) * s.view.scale).min(0.0);
+    s.dirty |= dirty::CANVAS | dirty::TOOLS;
 }

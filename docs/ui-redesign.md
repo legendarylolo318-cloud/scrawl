@@ -1,7 +1,7 @@
 # Scrawl UI redesign: one calm page that types like Google Docs and takes ink
 
-Status: **Phase 1 (investigation and plan). No application code has been changed yet.**
-Everything below is the plan I will build in Phase 2, in the order given at the end.
+Status: **Phase 2 built (see `HANDOFF.md` for what is done and what is left).** This file is the plan; the package for
+`crates/doc` is named `notedoc`, and the new screenshots are `docs/screenshots/new-*.png`.
 Source brief: `prompts/sonnet-ui-redesign.md`. Hard rules that apply to every step: Rust + Slint only (no
 Python), mouse/pen first with 40 px minimum targets, never lose user data, clippy `-D warnings` + full tests +
 `--self-test` before every commit, no release tags.

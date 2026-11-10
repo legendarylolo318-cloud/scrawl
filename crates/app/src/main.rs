@@ -272,6 +272,8 @@ impl State {
 
     /// Replace the canvas with the current page's saved ink, paper and background.
     pub fn load_page_into_doc(&mut self) {
+        self.dedit.ed = docedit::EditState::default();
+        self.dedit.layout = docview::Layout::new();
         if let Some(ws) = &self.ws {
             self.doc = Document::with_strokes(ws.page.strokes.clone());
             self.paper.kind = paper_kind(&ws.page.paper.kind);
@@ -575,6 +577,7 @@ fn refresh_tools(ui: &MainWindow, st: &State) {
         ui.set_fmt_italic(i);
         ui.set_fmt_underline(u);
         ui.set_para_kind(k.into());
+        ui.set_obj_kind(docedit::object_kind(st).into());
         let (cu, cr) = docedit::can_undo(st);
         ui.set_doc_can_undo(cu);
         ui.set_doc_can_redo(cr);
@@ -1125,22 +1128,7 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.on_goto_item(with!(|ui, s, id = SharedString| {
         if let Some(title) = id.strip_prefix("link:") {
             // follow a [[link]]; a link to a page that does not exist yet creates it
-            let target = s.ws.as_ref().and_then(|w| w.page_by_title(title));
-            match target {
-                Some(t) => {
-                    if let Err(e) = s.goto_page(&t, true) {
-                        s.set_status(e);
-                    }
-                }
-                None => {
-                    actions::new_page(s, "blank");
-                    if let Some(w) = &mut s.ws {
-                        w.rename(title);
-                    }
-                    s.set_status(format!("Created the linked page \"{title}\""));
-                    s.dirty |= dirty::SIDEBAR | dirty::TABS;
-                }
-            }
+            actions::follow_link(s, title);
         } else if let Ok(i) = id.parse::<usize>() {
             s.editing = Some(i);
             let text = s.ws.as_ref().and_then(|w| w.page.blocks.get(i)).map(pagedoc::edit_text).unwrap_or_default();
@@ -1564,7 +1552,7 @@ fn canvas_texts(st: &mut State, px_scale: f32) -> Vec<(f32, f32, Arc<tiny_skia::
     for t in &ws.page.texts {
         let [r, g, b, _] = t.color;
         // same rule as ink: near-white text is shown dark on light paper
-        let (r, g, b) = if light && r > 200 && g > 200 && b > 200 { (0x1f, 0x23, 0x35) } else { (r, g, b) };
+        let (r, g, b) = if light && r > 180 && g > 180 && b > 180 { (0x1f, 0x23, 0x35) } else { (r, g, b) };
         let px_per_pt = t.size * st.view.scale * px_scale / 11.0;
         let key = format!("{}\u{0}{r},{g},{b}\u{0}{:.3}", t.text, px_per_pt);
         if !st.text_cache.contains_key(&key) {
@@ -1602,6 +1590,9 @@ fn doc_layer(st: &mut State, px_scale: f32, canvas_w: f32, canvas_h: f32) -> Vec
         if ws.page.doc.is_none() {
             ws.page.ensure_doc();
             ws.touch();
+        }
+        if let Some(d) = ws.page.doc.as_mut() {
+            notedoc::ensure_not_empty(d);
         }
         let Some(doc) = ws.page.doc.as_ref() else { return vec![] };
         for p in &doc.paras {
