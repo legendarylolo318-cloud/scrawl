@@ -31,6 +31,11 @@ impl fmt::Display for VaultError {
 }
 impl std::error::Error for VaultError {}
 
+/// scrypt cost for new files: 2^16 (about 0.1-0.3 s per file on a laptop).
+pub const WORK_FACTOR: u8 = 16;
+/// Highest cost accepted when opening (age's automatic setting typically picks 18-20).
+pub const MAX_WORK_FACTOR: u8 = 22;
+
 impl Vault {
     pub fn none() -> Self {
         Self(None)
@@ -45,14 +50,28 @@ impl Vault {
     pub fn seal(&self, plain: &[u8]) -> Result<Vec<u8>, VaultError> {
         match &self.0 {
             None => Ok(plain.to_vec()),
-            Some(p) => age::encrypt(&age::scrypt::Recipient::new(p.clone()), plain).map_err(|e| VaultError::Io(e.to_string())),
+            Some(p) => {
+                // Fixed cost, not age's per-machine timing: every save is encrypted, and a notebook made on a
+                // fast PC must open on a slow one (or a busy one) without being mistaken for a wrong password.
+                let mut r = age::scrypt::Recipient::new(p.clone());
+                r.set_work_factor(WORK_FACTOR);
+                age::encrypt(&r, plain).map_err(|e| VaultError::Io(e.to_string()))
+            }
         }
     }
 
     pub fn open(&self, data: &[u8]) -> Result<Vec<u8>, VaultError> {
         match &self.0 {
             None => Ok(data.to_vec()),
-            Some(p) => age::decrypt(&age::scrypt::Identity::new(p.clone()), data).map_err(|_| VaultError::WrongPassword),
+            Some(p) => {
+                let mut id = age::scrypt::Identity::new(p.clone());
+                // also accept files written by older builds with age's automatic (higher) cost
+                id.set_max_work_factor(MAX_WORK_FACTOR);
+                age::decrypt(&id, data).map_err(|e| match e {
+                    age::DecryptError::DecryptionFailed | age::DecryptError::KeyDecryptionFailed | age::DecryptError::NoMatchingKeys | age::DecryptError::InvalidMac => VaultError::WrongPassword,
+                    other => VaultError::Io(format!("cannot decrypt: {other}")),
+                })
+            }
         }
     }
 }
@@ -70,5 +89,13 @@ mod tests {
         assert!(matches!(Vault::with_password("wrong").open(&sealed), Err(VaultError::WrongPassword)));
         assert!(!format!("{v:?}").contains("horse"));
         assert_eq!(Vault::none().seal(b"x").unwrap(), b"x");
+    }
+
+    #[test]
+    fn files_from_age_automatic_cost_still_open() {
+        // what older Scrawl builds wrote: age picks the cost by timing the machine
+        let p = age::secrecy::SecretString::from("pw".to_owned());
+        let old = age::encrypt(&age::scrypt::Recipient::new(p), b"old note").unwrap();
+        assert_eq!(Vault::with_password("pw").open(&old).unwrap(), b"old note");
     }
 }
