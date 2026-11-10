@@ -12,7 +12,13 @@ fn open_overlay(ui: &MainWindow, s: &mut State, name: &str) {
 fn close_overlay(ui: &MainWindow, s: &mut State) {
     s.overlay.clear();
     s.prompt = None;
-    ui.invoke_close_overlay();
+    // Do not call the Slint close-overlay() here: it invokes overlay-closed, which would borrow
+    // State again while we hold it (a RefCell panic). Reset everything directly instead.
+    s.rebinding = None;
+    s.history_pick = None;
+    ui.set_has_preview(false);
+    ui.set_overlay("".into());
+    ui.invoke_focus_canvas();
 }
 
 fn ask(ui: &MainWindow, s: &mut State, p: Prompt, title: &str, hint: &str, password: bool) {

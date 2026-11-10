@@ -1116,7 +1116,8 @@ fn main() -> Result<(), slint::PlatformError> {
         let (st2, weak2, timer2) = (st.clone(), weak.clone(), timer.clone());
         ui.on_pen_lifted(move || {
             let (st3, weak3) = (st2.clone(), weak2.clone());
-            let delay = st2.borrow().settings.recog_delay_ms;
+            // Undo/redo/delete call this while State is already borrowed: never borrow again here.
+            let delay = st2.try_borrow().map(|s| s.settings.recog_delay_ms).unwrap_or_else(|_| Settings::load().recog_delay_ms);
             timer2.start(slint::TimerMode::SingleShot, std::time::Duration::from_millis(delay), move || {
                 if let Some(ui) = weak3.upgrade() {
                     let s = &mut *st3.borrow_mut();
@@ -1224,6 +1225,11 @@ fn run_scene(ui: &MainWindow, st: &Rc<RefCell<State>>, scene: &str) {
                 ui.invoke_run_command("recognize".into());
             }
             "insert" => ui.invoke_run_command("insert".into()),
+            "undo" => {
+                ui.invoke_run_command("undo".into());
+                ui.invoke_run_command("redo".into());
+                ui.invoke_run_command("undo".into());
+            }
             "typing" => {
                 ui.invoke_run_command("typing".into());
                 for c in "alpha + int".chars() {
@@ -1257,6 +1263,13 @@ fn run_scene(ui: &MainWindow, st: &Rc<RefCell<State>>, scene: &str) {
                 ui.invoke_new_page("cornell notes".into());
             }
             "palette" => ui.invoke_run_command("palette".into()),
+            "pick" => {
+                ui.invoke_run_command("palette".into());
+                ui.invoke_overlay_pick("symbols".into());
+                ui.invoke_insert_symbol("α".into());
+                ui.invoke_run_command("switcher".into());
+                ui.invoke_overlay_query("".into());
+            }
             "symbols" => ui.invoke_run_command("symbols".into()),
             "settings" => ui.invoke_run_command("settings".into()),
             "shortcuts" => ui.invoke_run_command("shortcuts".into()),
