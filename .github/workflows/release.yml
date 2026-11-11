@@ -1,18 +1,34 @@
 name: release
+# Two kinds of release:
+# * a version tag (v1.2.0) builds a DRAFT release that you publish by hand;
+# * every push to main whose ci run passed rebuilds the "latest" pre-release (Windows exe + installer + AppImage).
 on:
   push:
     tags: ["v*"]
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
 permissions:
   contents: write
+# only the newest passing commit is released; an older build still running is cancelled
+concurrency:
+  group: release-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'workflow_run' }}
 env:
   CARGO_TERM_COLOR: always
-  TAG: ${{ github.ref_name }}
+  SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
 
 jobs:
   linux:
     runs-on: ubuntu-22.04   # old glibc => the AppImage runs on most distros
+    if: github.event_name == 'push' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
     steps:
       - uses: actions/checkout@v4
+        with: { ref: ${{ env.SHA }} }
+      - name: Version
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = workflow_run ]; then echo "VERSION=dev-${SHA::7}"; else echo "VERSION=${GITHUB_REF_NAME#v}"; fi >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: System libraries
@@ -28,13 +44,13 @@ jobs:
           curl -fsSL -o linuxdeploy https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
           chmod +x linuxdeploy
           mkdir -p AppDir
-          VERSION="${TAG#v}" ./linuxdeploy --appimage-extract-and-run --appdir AppDir \
+          ./linuxdeploy --appimage-extract-and-run --appdir AppDir \
             --executable target/release/scrawl \
             --desktop-file packaging/scrawl.desktop \
             --icon-file packaging/scrawl.png --icon-filename scrawl \
             --output appimage
           mkdir -p dist
-          mv Scrawl-*.AppImage "dist/Scrawl-${TAG#v}-x86_64.AppImage"
+          mv Scrawl-*.AppImage "dist/Scrawl-$VERSION-x86_64.AppImage"
       - name: Self-test the AppImage
         run: |
           chmod +x dist/*.AppImage
@@ -44,8 +60,15 @@ jobs:
 
   windows:
     runs-on: windows-latest
+    if: github.event_name == 'push' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
     steps:
       - uses: actions/checkout@v4
+        with: { ref: ${{ env.SHA }} }
+      - name: Version
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_EVENT_NAME -eq "workflow_run") { $v = "dev-" + $env:SHA.Substring(0, 7) } else { $v = $env:GITHUB_REF_NAME.TrimStart("v") }
+          "VERSION=$v" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - uses: dtolnay/rust-toolchain@stable
         with: { targets: x86_64-pc-windows-msvc }
       - uses: Swatinem/rust-cache@v2
@@ -66,13 +89,12 @@ jobs:
       - name: Portable exe
         shell: pwsh
         run: |
-          $v = "${{ github.ref_name }}".TrimStart("v")
-          Copy-Item dist/scrawl.exe "dist/Scrawl-$v-windows-x64.exe"
+          Copy-Item dist/scrawl.exe "dist/Scrawl-$env:VERSION-windows-x64.exe"
       - name: Installer (Inno Setup)
         shell: pwsh
         run: |
           choco install innosetup -y --no-progress
-          $env:SCRAWL_VERSION = "${{ github.ref_name }}".TrimStart("v")
+          $env:SCRAWL_VERSION = $env:VERSION
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" packaging\scrawl.iss
       - name: Self-test the installed app
         shell: pwsh
@@ -101,10 +123,21 @@ jobs:
           cd artifacts
           sha256sum * > SHA256SUMS
           cat SHA256SUMS
-      - name: Draft release
+      - name: Draft release (version tag)
+        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${{ github.ref_name }}" artifacts/* \
             --draft --title "Scrawl ${{ github.ref_name }}" \
             --notes "Draft. See CHANGELOG.md. Verify with SHA256SUMS."
+      - name: Latest build (main passed ci)
+        if: github.event_name == 'workflow_run'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # replace the previous "latest" pre-release and its tag with this commit's build
+          gh release delete latest --cleanup-tag --yes || true
+          gh release create latest artifacts/* --prerelease --target "$SHA" \
+            --title "Scrawl latest build (${SHA::7})" \
+            --notes "Automatic build of main at $SHA after ci passed (tests, clippy, self-test on Linux and Windows). Not a numbered release: see CHANGELOG.md (Unreleased). Windows: the -setup.exe installs, the other .exe runs without installing. Linux: chmod +x the .AppImage and run it. Verify with SHA256SUMS."

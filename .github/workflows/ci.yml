@@ -1,5 +1,9 @@
 name: ci
 on: [push, pull_request]
+# a new push to the same branch cancels the older run: only the newest commit is checked
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 env:
   CARGO_TERM_COLOR: always
 jobs:
