@@ -1,0 +1,7 @@
+{
+  "name": "hello-wat",
+  "version": "1.0.0",
+  "description": "The smallest possible plugin, written in WebAssembly text: it just says hello",
+  "wasm": "plugin.wat",
+  "commands": [ { "id": "hello", "title": "Say hello from WebAssembly" } ]
+}

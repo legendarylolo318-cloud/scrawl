@@ -7,8 +7,10 @@
 
 mod edit;
 mod markup;
+mod md;
 mod model;
 
 pub use edit::*;
 pub use markup::{escape_text, para_markup};
+pub use md::{front_matter, hashtags, MdMeta};
 pub use model::*;

@@ -122,6 +122,12 @@ cmds! {
     "fmt-link", "Link text to a page or web address", "", "Text";
     "insert-table", "Insert a table", "", "Page";
     "chip-dismiss", "Keep handwriting as ink (dismiss the suggestion)", "", "Ink";
+    "tags", "Tags: pages by #tag", "", "Notes";
+    "export-vault", "Export the notebook as an Obsidian vault (Markdown folder)", "", "Export";
+    "import-vault", "Import an Obsidian vault or a folder of Markdown files", "", "Export";
+    "note-graph", "Graph of linked notes", "", "Notes";
+    "plugins", "Plugins: see, switch on and off", "", "Plugins";
+    "plugins-reload", "Plugins: reload from the plugins folder", "", "Plugins";
     "replace", "Replace text on this page", "ctrl+h", "Page";
     "chip-toggle-words", "Read the handwriting as words instead of math (or the other way)", "", "Ink";
     "outline", "Outline of this page (headings)", "", "Page";
@@ -237,6 +243,6 @@ mod tests {
     #[test]
     fn palette_filter() {
         let hits: Vec<&str> = ALL.iter().filter(|c| matches(c, "exp note")).map(|c| c.id).collect();
-        assert_eq!(hits, vec!["export-notebook"]);
+        assert_eq!(hits, vec!["export-notebook", "export-vault"]);
     }
 }

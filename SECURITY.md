@@ -54,6 +54,16 @@ block, by design), physical access to an unlocked machine, and the security of y
    a "tablet server running" indicator with a Stop button whenever the server is on, and the server
    stops itself after 15 minutes without activity (configurable) and when the app closes.
 
+## Plugins
+
+Plugins (`docs/plugins.md`) are WebAssembly modules run by the pure-Rust `wasmi` interpreter. They cannot import host
+functions, so they have no file, network, clock or environment access; they receive only the selection and the current
+page text, and can only answer with four text actions. Each call uses a fresh instance with an instruction budget
+(50 million) and a 64 MB memory cap. Folders are read with size limits, symbolic links are ignored and the module path
+cannot leave the plugin folder. A plugin can still write unwanted text into the page (undo removes it), so install only
+plugins you trust. Vault import (`docs/obsidian.md`) reads only inside the chosen folder, ignores symbolic links and dot
+folders and limits file sizes and counts.
+
 ## Setting up a device (one time)
 
 Open `http://<PC address>:8080/` on the device while the setup screen is open.

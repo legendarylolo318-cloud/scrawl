@@ -872,3 +872,76 @@ mod mixed_tests {
         }
     }
 }
+
+// ------------------------------------------------------------------------------------ page links
+
+/// While typing `[[Ti`: the offset of the `[[` and the text typed after it (no `]` yet).
+pub fn link_query(doc: &Doc, pos: Pos) -> Option<(usize, String)> {
+    let p = doc.paras.get(pos.para)?;
+    if !p.kind.is_text() {
+        return None;
+    }
+    let c = chars_of(p);
+    let end = pos.off.min(c.len());
+    let k = (0..end.saturating_sub(1)).rev().find(|&k| c[k] == '[' && c[k + 1] == '[')?;
+    let q: String = c[k + 2..end].iter().collect();
+    (!q.contains([']', '\u{FFFC}', '\n']) && q.chars().count() <= 80).then_some((k, q))
+}
+
+/// Replace `[[query` before the caret with a link to `title`. Returns the caret after the link.
+pub fn accept_link(doc: &mut Doc, pos: Pos, title: &str) -> Option<Pos> {
+    let (k, _) = link_query(doc, pos)?;
+    let p = &mut doc.paras[pos.para];
+    let mut runs = slice_runs(&p.runs, 0, k);
+    runs.push(Run::Text { text: title.to_string(), style: Style::default(), link: Some(Link::Page(title.to_string())) });
+    runs.extend(slice_runs(&p.runs, pos.off, usize::MAX));
+    p.runs = normalize(runs);
+    Some(Pos { para: pos.para, off: k + title.chars().count() })
+}
+
+/// Call right after `]` was typed (caret after it): `[[Title]]` becomes a link to that page.
+pub fn autoformat_link(doc: &mut Doc, pos: Pos) -> Option<Pos> {
+    let p = doc.paras.get(pos.para)?;
+    let c = chars_of(p);
+    if pos.off < 4 || c.get(pos.off - 1) != Some(&']') || c.get(pos.off - 2) != Some(&']') {
+        return None;
+    }
+    let (k, _) = link_query(doc, Pos { para: pos.para, off: pos.off - 2 })?;
+    let title: String = chars_of(&doc.paras[pos.para])[k + 2..pos.off - 2].iter().collect();
+    let title = title.trim().to_string();
+    if title.is_empty() {
+        return None;
+    }
+    let p = &mut doc.paras[pos.para];
+    let mut runs = slice_runs(&p.runs, 0, k);
+    runs.push(Run::Text { text: title.clone(), style: Style::default(), link: Some(Link::Page(title.clone())) });
+    runs.extend(slice_runs(&p.runs, pos.off, usize::MAX));
+    p.runs = normalize(runs);
+    Some(Pos { para: pos.para, off: k + title.chars().count() })
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::*;
+
+    #[test]
+    fn typing_brackets_makes_a_link_and_autocomplete_replaces_the_query() {
+        let mut d = Doc::from_markup("see ");
+        let at = insert_text(&mut d, Sel::caret(Pos { para: 0, off: 4 }), "[[Lim", Style::default());
+        assert_eq!(link_query(&d, at), Some((4, "Lim".to_string())));
+        let after = accept_link(&mut d, at, "Limits").unwrap();
+        assert_eq!(d.paras[0].plain(), "see Limits");
+        assert_eq!(after, Pos { para: 0, off: 10 });
+        assert!(matches!(&d.paras[0].runs[1], Run::Text { link: Some(Link::Page(t)), .. } if t == "Limits"));
+
+        let mut e = Doc::from_markup("x ");
+        let at = insert_text(&mut e, Sel::caret(Pos { para: 0, off: 2 }), "[[Other]]", Style::default());
+        let at = autoformat_link(&mut e, at).unwrap();
+        assert_eq!(e.to_typst(), "x [[Other]]");
+        assert_eq!(at, Pos { para: 0, off: 7 });
+        // no query once the brackets are closed, and a lone [ is nothing
+        assert!(link_query(&e, at).is_none());
+        assert!(link_query(&Doc::from_markup("a [b"), Pos { para: 0, off: 4 }).is_none());
+        assert!(autoformat_link(&mut Doc::from_markup("[[]]"), Pos { para: 0, off: 4 }).is_none());
+    }
+}

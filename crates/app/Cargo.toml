@@ -11,6 +11,7 @@ recog = { path = "../recog" }
 layout = { path = "../layout" }
 render = { path = "../render" }
 notedoc = { path = "../doc" }
+plugin = { path = "../plugin" }
 docview = { path = "../docview" }
 store = { path = "../store" }
 search = { path = "../search" }

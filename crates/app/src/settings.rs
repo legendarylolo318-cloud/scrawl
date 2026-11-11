@@ -71,6 +71,8 @@ pub struct Settings {
     pub show_doc: bool,
     /// Show the page with the new document editor (off until it is finished).
     pub new_editor: bool,
+    /// Names of plugins the user switched off.
+    pub disabled_plugins: Vec<String>,
     pub show_sidebar: bool,
     pub tablet_idle_min: u64,
 }
@@ -109,6 +111,7 @@ impl Default for Settings {
             show_doc: true,
             show_sidebar: true,
             new_editor: true,
+            disabled_plugins: vec![],
             tablet_idle_min: 15,
         }
     }

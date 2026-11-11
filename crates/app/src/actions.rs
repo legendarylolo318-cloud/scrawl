@@ -282,6 +282,15 @@ pub fn shortcut(ui: &MainWindow, s: &mut State, key: &str, ctrl: bool, alt: bool
 
 pub fn run(ui: &MainWindow, s: &mut State, id: &str) {
     let now = s.now_ms();
+    if let Some(rest) = id.strip_prefix("plugin:") {
+        run_plugin(s, rest);
+        return;
+    }
+    if let Some(t) = id.strip_prefix("link-pick:") {
+        docedit::accept_link_title(s, t);
+        ui.invoke_focus_canvas();
+        return;
+    }
     match id {
         "outline" => {
             open_overlay(ui, s, "outline");
@@ -318,6 +327,47 @@ pub fn run(ui: &MainWindow, s: &mut State, id: &str) {
         }
         "fmt-link" => {
             ask(ui, s, Prompt::LinkTarget, "Link", "A page title, or a web address starting with http", false);
+            return;
+        }
+        "note-graph" => {
+            s.sync_ws();
+            s.note_graph = s.ws.as_ref().map(notegraph::NoteGraph::build);
+            let n = s.note_graph.as_ref().map_or(0, |g| g.nodes.len());
+            open_overlay(ui, s, "notegraph");
+            refresh_note_graph(ui, s);
+            s.set_status(format!("{n} note(s) in this notebook"));
+            return;
+        }
+        "tags" => {
+            s.tag_pick = None;
+            open_overlay(ui, s, "tags");
+            overlay_query(ui, s, "");
+            return;
+        }
+        "export-vault" | "import-vault" => {
+            let export = id == "export-vault";
+            s.sync_ws();
+            let picked = if std::env::var_os("SCRAWL_SHOT").is_none() && (!cfg!(target_os = "linux") || std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_some()) {
+                Some(rfd::FileDialog::new().set_title(if export { "Choose where to put the vault folder" } else { "Choose the vault (a folder of .md files)" }).pick_folder())
+            } else {
+                None
+            };
+            match picked {
+                Some(Some(p)) => vault_run(s, export, &p),
+                Some(None) => {}
+                None => ask(ui, s, if export { Prompt::ExportVault } else { Prompt::ImportVault }, if export { "Export as Obsidian vault" } else { "Import Obsidian vault" }, "Full path of the folder", false),
+            }
+            return;
+        }
+        "plugins" => {
+            open_overlay(ui, s, "plugins");
+            overlay_query(ui, s, "");
+            return;
+        }
+        "plugins-reload" => {
+            s.reload_plugins();
+            let n = s.plugins.len();
+            s.set_status(format!("{n} plugin{} loaded{}", if n == 1 { "" } else { "s" }, if s.plugin_errors.is_empty() { String::new() } else { format!(", {} with problems (Plugins screen)", s.plugin_errors.len()) }));
             return;
         }
         "chip-toggle-words" => {
@@ -1031,12 +1081,45 @@ pub fn overlay_query(ui: &MainWindow, s: &mut State, q: &str) {
                 .filter(|c| commands::matches(c, q))
                 .map(|c| CmdRow { id: c.id.into(), title: c.title.into(), key: s.settings.binding(c.id).map(|k| commands::pretty(&k)).unwrap_or_default().into(), group: c.group.into() })
                 .collect();
+            let mut rows = rows;
+            if s.overlay == "palette" {
+                for (id, title, name) in s.plugin_commands() {
+                    if q.to_lowercase().split_whitespace().all(|w| format!("{title} {name} plugin").to_lowercase().contains(w)) {
+                        rows.push(CmdRow { id: id.into(), title: title.into(), key: SharedString::new(), group: "Plugin".into() });
+                    }
+                }
+            }
             ui.set_commands(model(rows));
         }
         "switcher" | "split-pick" => {
             let ql = q.to_lowercase();
             let rows: Vec<ItemRow> = s.ws.as_ref().map(|w| w.rows()).unwrap_or_default().into_iter().filter(|r| !r.is_section && r.title.to_lowercase().contains(&ql)).map(|r| item(r.id, r.title, r.section)).collect();
             ui.set_items_hint("".into());
+            ui.set_items(model(rows));
+        }
+        "tags" => {
+            let ql = q.to_lowercase();
+            let rows: Vec<ItemRow> = s.ws.as_ref().map(|w| w.tags_overview()).unwrap_or_default().into_iter().filter(|(t, _)| t.contains(&ql)).map(|(t, pages)| item(t.clone(), format!("#{t}"), format!("{} page(s)", pages.len()))).collect();
+            ui.set_items_hint(if rows.is_empty() { "No tags yet: type #tag in a note, or add tags to a page.".into() } else { "Pick a tag to see its pages.".into() });
+            ui.set_items(model(rows));
+        }
+        "tagpages" => {
+            let tag = s.tag_pick.clone().unwrap_or_default();
+            let rows: Vec<ItemRow> = s.ws.as_ref().map(|w| w.tags_overview()).unwrap_or_default().into_iter().find(|(t, _)| *t == tag).map(|(_, p)| p).unwrap_or_default().into_iter().map(|(id, title)| item(id, title, String::new())).collect();
+            ui.set_items_hint(format!("Pages tagged #{tag}").into());
+            ui.set_items(model(rows));
+        }
+        "plugins" => {
+            let mut rows: Vec<ItemRow> = s
+                .plugins
+                .iter()
+                .map(|p| {
+                    let off = s.settings.disabled_plugins.contains(&p.manifest.name);
+                    item(p.manifest.name.clone(), format!("{} {}{}", p.manifest.name, p.manifest.version, if off { "  (off)" } else { "" }), format!("{}  ·  {} command(s), {} snippet(s)  ·  click to turn {}", p.manifest.description, p.manifest.commands.len(), p.manifest.snippets.len(), if off { "on" } else { "off" }))
+                })
+                .collect();
+            rows.extend(s.plugin_errors.iter().map(|e| item("", "Could not load", e.clone())));
+            ui.set_items_hint(format!("Plugins folder: {}\nPlugins are sandboxed: they only see the selection and the page text, and can only insert text. Add a folder with a plugin.json, then run Reload plugins.", plugins_dir().display()).into());
             ui.set_items(model(rows));
         }
         "outline" => {
@@ -1091,6 +1174,29 @@ pub fn overlay_pick(ui: &MainWindow, s: &mut State, id: &str) {
         "palette" => {
             close_overlay(ui, s);
             run(ui, s, id);
+        }
+        "tags" => {
+            s.tag_pick = Some(id.to_string());
+            open_overlay(ui, s, "tagpages");
+            overlay_query(ui, s, "");
+        }
+        "tagpages" => {
+            close_overlay(ui, s);
+            if let Err(e) = s.goto_page(id, true) {
+                s.set_status(e);
+            }
+        }
+        "plugins" => {
+            if !id.is_empty() {
+                let d = &mut s.settings.disabled_plugins;
+                if let Some(i) = d.iter().position(|n| n == id) {
+                    d.remove(i);
+                } else {
+                    d.push(id.to_string());
+                }
+                s.settings.save();
+                overlay_query(ui, s, "");
+            }
         }
         "outline" => {
             close_overlay(ui, s);
@@ -1233,6 +1339,8 @@ pub fn prompt_ok(ui: &MainWindow, s: &mut State, text: &str) {
             let n = docedit::replace_all(s, &find, text);
             s.set_status(format!("Replaced {n}"));
         }
+        Prompt::ExportVault if !t.is_empty() => vault_run(s, true, Path::new(t)),
+        Prompt::ImportVault if !t.is_empty() => vault_run(s, false, Path::new(t)),
         Prompt::InlineMath if !t.is_empty() => {
             let src = if layout::looks_like_latex(t) { layout::latex_to_typst(t) } else { t.trim_matches('$').trim().to_string() };
             docedit::insert_math_at_caret(s, &src);
@@ -1815,6 +1923,51 @@ pub fn follow_link(s: &mut State, title: &str) {
             }
             s.set_status(format!("Created the linked page \"{title}\""));
             s.dirty |= dirty::SIDEBAR | dirty::TABS;
+        }
+    }
+}
+
+/// Run `<plugin>:<command>` (a command or `snippet:<id>`) and apply its actions.
+fn run_plugin(s: &mut State, rest: &str) {
+    let Some((name, cmd)) = rest.split_once(':') else { return };
+    let Some(p) = s.plugins.iter().find(|p| p.manifest.name == name && !s.settings.disabled_plugins.iter().any(|d| d == name)).cloned() else {
+        s.set_status(format!("Plugin {name} is not available"));
+        return;
+    };
+    if !docedit::active(s) && s.ws.as_ref().is_none_or(|w| w.page.doc.is_none()) {
+        s.set_status("Open a page to use a plugin");
+        return;
+    }
+    let req = docedit::plugin_request(s);
+    match p.run(cmd, req) {
+        Ok(actions) => {
+            let status = docedit::apply_plugin_actions(s, actions);
+            s.set_status(status.unwrap_or_else(|| format!("{name}: done (Ctrl+Z undoes it)")));
+        }
+        Err(e) => s.set_status(format!("{name}: {e}")),
+    }
+}
+
+/// Export the current notebook to, or import a vault from, `dir`.
+fn vault_run(s: &mut State, export: bool, dir: &Path) {
+    s.sync_ws();
+    let now = s.now_ms();
+    let Some(ws) = s.ws.as_mut() else { return };
+    if export {
+        match vault::export(ws, dir) {
+            Ok((r, root)) => s.set_status(format!("Exported {} page(s) and {} image(s) to {}{}", r.pages, r.images, root.display(), if r.skipped.is_empty() { String::new() } else { format!(" ({} problem(s): {})", r.skipped.len(), r.skipped[0]) })),
+            Err(e) => s.set_status(format!("Export failed: {e}")),
+        }
+    } else {
+        match vault::import(ws, dir, now) {
+            Ok(r) => {
+                let dangling = s.ws.as_ref().map(vault::dangling_links).unwrap_or(0);
+                s.tabs.clear();
+                s.load_page_into_doc();
+                s.dirty |= dirty::SIDEBAR | dirty::TABS | dirty::CANVAS | dirty::DOC;
+                s.set_status(format!("Imported {} page(s) and {} image(s) as a new notebook{}{}", r.pages, r.images, if dangling > 0 { format!("; {dangling} link(s) point at pages that do not exist yet (following one creates it)") } else { String::new() }, if r.skipped.is_empty() { String::new() } else { format!("; skipped {} file(s): {}", r.skipped.len(), r.skipped[0]) }));
+            }
+            Err(e) => s.set_status(format!("Import failed: {e}")),
         }
     }
 }

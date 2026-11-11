@@ -834,3 +834,27 @@ mod welcome_tests {
         assert!(d.plain_text().contains("Ctrl+K"));
     }
 }
+
+impl Workspace {
+    /// Every tag in the notebook with the pages that carry it: (tag, [(page id, title)]), most used first.
+    pub fn tags_overview(&self) -> Vec<(String, Vec<(String, String)>)> {
+        let mut map: std::collections::BTreeMap<String, Vec<(String, String)>> = Default::default();
+        for sec in &self.nb.sections {
+            for r in &sec.pages {
+                let tags = if r.id == self.page.id { Some(self.page.tags.clone()) } else { self.load_other(&r.id).map(|p| p.tags) };
+                for t in tags.unwrap_or_default() {
+                    let t = t.trim().trim_start_matches('#').to_lowercase();
+                    if !t.is_empty() {
+                        let e = map.entry(t).or_default();
+                        if !e.iter().any(|(id, _)| *id == r.id) {
+                            e.push((r.id.clone(), r.title.clone()));
+                        }
+                    }
+                }
+            }
+        }
+        let mut v: Vec<_> = map.into_iter().collect();
+        v.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then(a.0.cmp(&b.0)));
+        v
+    }
+}

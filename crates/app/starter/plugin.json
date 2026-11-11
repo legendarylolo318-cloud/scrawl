@@ -1,0 +1,12 @@
+{
+  "name": "starter-snippets",
+  "version": "1.0.0",
+  "description": "Ready-made note layouts. Edit this file or add your own plugin folders next to it.",
+  "snippets": [
+    { "id": "meeting", "title": "Meeting notes", "markdown": "## Meeting\n\n**Date:** \n**People:** \n\n### Agenda\n- \n\n### Decisions\n- \n\n### To do\n- [ ] \n" },
+    { "id": "daily-review", "title": "Daily review", "markdown": "## Daily review\n\n### Done today\n- [ ] \n\n### Tomorrow\n- [ ] \n\n### Notes\n\n" },
+    { "id": "cornell", "title": "Cornell notes", "markdown": "## Topic\n\n### Cues\n- \n\n### Notes\n\n\n### Summary\n\n" },
+    { "id": "definition", "title": "Definition and example", "markdown": "> [!note] Definition: \n\n> [!example] Example: \n" },
+    { "id": "problem", "title": "Problem set entry", "markdown": "## Problem \n\n$$\n\n$$\n\n**Solution**\n\n" }
+  ]
+}

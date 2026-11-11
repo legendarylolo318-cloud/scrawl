@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased: Obsidian features and plugins
+
+### Added
+- **Wiki links:** type `[[` for page suggestions; `[[Title]]` becomes a link; a **Linked from** strip lists backlinks.
+- **Graph of linked notes** (force-directed, click to open), **Tags** screen, `#tags` typed in a note become page tags.
+- **Obsidian vault export and import** (Markdown with front matter, tasks, callouts, wiki links, math, images);
+  pasting Markdown keeps its structure. See `docs/obsidian.md`.
+- **Plugins:** sandboxed WebAssembly plugins (pure-Rust `wasmi`) and no-code snippet packs, with a Plugins screen.
+  See `docs/plugins.md`, `examples/plugins`, and the Plugins section of `SECURITY.md`.
+
 ## 1.1.1 (2026-11-10): better handwriting-to-text
 
 ### Changed

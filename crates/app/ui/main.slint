@@ -345,6 +345,9 @@ export component MainWindow inherits Window {
     in property <bool> fmt-underline: false;
     in property <string> para-kind: "";
     in property <string> obj-kind: "";
+    in property <[ItemRow]> link-suggest;
+    in property <length> link-x;
+    in property <length> link-y;
     in property <bool> doc-can-undo: false;
     in property <bool> doc-can-redo: false;
     in-out property <bool> tray-open: true;
@@ -356,6 +359,10 @@ export component MainWindow inherits Window {
     in property <string> chip-text;
     in property <bool> chip-math: false;
     in property <bool> mode-auto: false;
+    in property <image> note-graph-frame;
+    in property <[LabelRow]> note-graph-labels;
+    callback note-graph-resized(length, length);
+    callback note-graph-click(float, float);
     callback open-menu(string);
     in property <bool> pixel-erase: false;
     in property <bool> can-undo: false;
@@ -930,6 +937,24 @@ export component MainWindow inherits Window {
                             ToolButton { label: "✕"; tip: "Cancel"; clicked => { root.textbox-cancel(); } }
                         }
                     }
+                    // ---- [[ page link suggestions at the caret
+                    if root.new-editor && root.link-suggest.length > 0 && root.tool == "textbox" : Rectangle {
+                        width: min(parent.width - 16px, 320px * Theme.scale);
+                        height: lcol.preferred-height + 8px;
+                        x: max(8px, min(root.link-x, parent.width - self.width - 8px));
+                        y: min(root.link-y, parent.height - self.height - 8px);
+                        border-radius: 8px; background: Theme.panel; border-width: 1px; border-color: Theme.accent;
+                        TouchArea { }
+                        lcol := VerticalLayout {
+                            padding: 4px; spacing: 2px;
+                            for it[i] in root.link-suggest : Rectangle {
+                                height: Theme.hit; border-radius: 6px;
+                                background: lta.has-hover ? Theme.hover : i == 0 ? Theme.surface : transparent;
+                                Text { x: 10px; text: it.title; color: Theme.text; vertical-alignment: center; overflow: elide; width: parent.width - 20px; }
+                                lta := TouchArea { clicked => { root.run-command("link-pick:" + it.id); } }
+                            }
+                        }
+                    }
                     // ---- handwriting suggestion next to the ink
                     if root.new-editor && root.chip-visible && !root.present-mode : Rectangle {
                         width: min(parent.width - 16px, 440px * Theme.scale);
@@ -1259,6 +1284,16 @@ export component MainWindow inherits Window {
                     }
                 }
             }
+            // ---- backlinks: pages that link here
+            if root.new-editor && root.backlinks.length > 0 && !root.present-mode && !root.focus-mode : Rectangle {
+                background: Theme.panel;
+                height: Theme.hit + 8px * Theme.scale;
+                ScrollRow {
+                    pad: 4px * Theme.scale;
+                    Text { text: "Linked from"; color: Theme.muted; font-size: Theme.fs-small; vertical-alignment: center; }
+                    for o in root.backlinks : ToolButton { label: o.title; tip: "Open " + o.title; clicked => { root.open-page(o.id); } }
+                }
+            }
             // ---- status line
             if root.status != "" && !root.present-mode : Rectangle {
                 background: Theme.surface;
@@ -1336,8 +1371,8 @@ export component MainWindow inherits Window {
             }
         }
     }
-    if root.overlay == "switcher" || root.overlay == "outline" || root.overlay == "trash" || root.overlay == "history" || root.overlay == "backups" || root.overlay == "split-pick" : Modal {
-        title: root.overlay == "switcher" ? "Go to page" : root.overlay == "outline" ? "Outline" : root.overlay == "trash" ? "Trash (pages are kept 30 days)" : root.overlay == "history" ? "Version history" : root.overlay == "backups" ? "Backups" : "Show which page beside this one?";
+    if root.overlay == "switcher" || root.overlay == "outline" || root.overlay == "plugins" || root.overlay == "tags" || root.overlay == "tagpages" || root.overlay == "trash" || root.overlay == "history" || root.overlay == "backups" || root.overlay == "split-pick" : Modal {
+        title: root.overlay == "switcher" ? "Go to page" : root.overlay == "outline" ? "Outline" : root.overlay == "plugins" ? "Plugins (click one to turn it on or off)" : root.overlay == "tags" ? "Tags" : root.overlay == "tagpages" ? "Pages with this tag" : root.overlay == "trash" ? "Trash (pages are kept 30 days)" : root.overlay == "history" ? "Version history" : root.overlay == "backups" ? "Backups" : "Show which page beside this one?";
         card-h: 600px;
         close => { root.close-overlay(); }
         if root.overlay == "switcher" || root.overlay == "split-pick" || root.overlay == "outline" : LineEdit {
@@ -1380,6 +1415,23 @@ export component MainWindow inherits Window {
             spacing: 6px; alignment: end;
             Text { text: root.backup-info; color: Theme.muted; font-size: Theme.fs-small; vertical-alignment: center; horizontal-stretch: 1; wrap: word-wrap; }
             ToolButton { label: "Back up now"; clicked => { root.run-command("backup"); } }
+        }
+    }
+    if root.overlay == "notegraph" : Modal {
+        title: "Linked notes (click a note to open it)";
+        card-w: 1000px; card-h: 720px;
+        close => { root.close-overlay(); }
+        Rectangle {
+            vertical-stretch: 1;
+            clip: true;
+            border-radius: 6px;
+            background: Theme.bg;
+            changed width => { root.note-graph-resized(self.width, self.height); }
+            changed height => { root.note-graph-resized(self.width, self.height); }
+            init => { root.note-graph-resized(self.width, self.height); }
+            Image { source: root.note-graph-frame; width: parent.width; height: parent.height; image-fit: fill; accessible-role: image; accessible-label: "Graph of linked notes"; }
+            for l in root.note-graph-labels : Text { x: l.x; y: l.y; text: l.text; color: Theme.text; font-size: 12px * Theme.scale; }
+            TouchArea { clicked => { root.note-graph-click(self.mouse-x / self.width, self.mouse-y / self.height); } }
         }
     }
     if root.overlay == "symbols" : Modal {

@@ -53,6 +53,7 @@ pub const SHARE: &[Item] = items! {
         "export", "Export this page…", "Ctrl+E";
         "export-notebook", "Export the whole notebook", "";
         "print", "Print", "Ctrl+Shift+O";
+        "export-vault", "Export as Obsidian vault", "";
     ]
     "Copy" => [
         "copy-latex", "Copy math as LaTeX", "Ctrl+Shift+L";
@@ -86,6 +87,9 @@ pub const MORE: &[Item] = items! {
         "quick-note", "Quick note", "Ctrl+Shift+N";
         "today", "Today's note", "";
         "trash", "Trash", "";
+        "tags", "Tags", "";
+        "note-graph", "Graph of linked notes", "";
+        "import-vault", "Import an Obsidian vault", "";
         "new-section", "New section", "";
         "new-notebook", "New notebook", "";
         "new-encrypted", "New encrypted notebook", "";
@@ -100,6 +104,8 @@ pub const MORE: &[Item] = items! {
     ]
     "Tools" => [
         "tablet", "Use a tablet as a pen", "";
+        "plugins", "Plugins", "";
+        "plugins-reload", "Reload plugins", "";
         "train", "Teach Scrawl my handwriting", "";
         "clear", "Clear all ink on this page", "";
         "snap-toggle", "Snap shapes on or off", "";

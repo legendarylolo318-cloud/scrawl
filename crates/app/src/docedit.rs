@@ -138,6 +138,8 @@ pub struct EditState {
     pub redo_order: Vec<Layer>,
     /// Ink edits already entered into `order` (compared with `ink::Document::ops`).
     pub ink_seen: u64,
+    /// The `[[` suggestions were dismissed with Esc for this (paragraph, offset of the `[[`).
+    pub link_dismissed: Option<(usize, usize)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -148,7 +150,7 @@ pub enum Layer {
 
 impl Default for EditState {
     fn default() -> Self {
-        Self { sel: Sel::default(), undo: vec![], redo: vec![], pending: None, last_kind: "", goal_x: None, dragging: false, click: None, caret_on: true, press_was_click: false, order: vec![], redo_order: vec![], ink_seen: 0 }
+        Self { sel: Sel::default(), undo: vec![], redo: vec![], pending: None, last_kind: "", goal_x: None, dragging: false, click: None, caret_on: true, press_was_click: false, order: vec![], redo_order: vec![], ink_seen: 0, link_dismissed: None }
     }
 }
 
@@ -188,6 +190,14 @@ fn snapshot(s: &mut State, kind: &'static str) {
 fn after_edit(s: &mut State) {
     if let Some(ws) = &mut s.ws {
         ws.touch();
+        // #tags typed in the text become page tags (never removed automatically)
+        if let Some(d) = ws.page.doc.as_ref() {
+            for t in d.hashtags() {
+                if !ws.page.tags.contains(&t) {
+                    ws.page.tags.push(t);
+                }
+            }
+        }
         // keep the block copy current so export, print, search and history previews see the latest text
         ws.page.sync_blocks();
     }
@@ -255,6 +265,10 @@ fn type_text(s: &mut State, text: &str) {
             if let Some(p) = notedoc::autoformat_dollar(doc, pos) {
                 pos = p;
             }
+        } else if text == "]" {
+            if let Some(p) = notedoc::autoformat_link(doc, pos) {
+                pos = p;
+            }
         }
         pos
     });
@@ -285,10 +299,26 @@ pub fn copy_text(s: &State) -> Option<String> {
 }
 
 fn paste(s: &mut State) {
-    let text = arboard::Clipboard::new().and_then(|mut c| c.get_text()).unwrap_or_default();
-    if !text.is_empty() {
-        type_text(s, &text.replace("\r\n", "\n"));
+    let text = arboard::Clipboard::new().and_then(|mut c| c.get_text()).unwrap_or_default().replace("\r\n", "\n");
+    if text.is_empty() {
+        return;
     }
+    if looks_like_markdown(&text) {
+        insert_markdown(s, &text);
+    } else {
+        type_text(s, &text);
+    }
+}
+
+/// Text copied from a Markdown editor (Obsidian, GitHub ...) keeps its headings, lists, tasks and links when pasted.
+pub fn looks_like_markdown(t: &str) -> bool {
+    if !t.contains('\n') && !t.contains("[[") {
+        return false;
+    }
+    t.contains("[[") || t.lines().any(|l| {
+        let l = l.trim_start();
+        l.starts_with("# ") || l.starts_with("## ") || l.starts_with("### ") || l.starts_with("- ") || l.starts_with("* ") || l.starts_with("> ") || l.starts_with("```") || l.starts_with("|") || l.starts_with("- [") || l.split_once(". ").is_some_and(|(n, _)| !n.is_empty() && n.len() < 4 && n.chars().all(|c| c.is_ascii_digit()))
+    }) || t.contains("**")
 }
 
 fn toggle(s: &mut State, f: Fmt) {
@@ -317,6 +347,22 @@ fn toggle(s: &mut State, f: Fmt) {
 pub fn key(s: &mut State, text: &str, ctrl: bool, alt: bool, shift: bool, meta: bool) -> bool {
     if !active(s) && !start_typing(s, text, ctrl || alt || meta) {
         return false;
+    }
+    // with the [[ suggestions open: Tab or Enter takes the first, Esc closes them
+    if matches!(text, "\t" | "\n" | "\u{1b}") && !ctrl && !alt {
+        let sug = link_suggestions(s);
+        if let Some((target, _)) = sug.first() {
+            if text == "\u{1b}" {
+                let head = s.dedit.ed.sel.head;
+                let start = with_doc(s, |d| notedoc::link_query(d, head).map(|q| q.0)).flatten();
+                s.dedit.ed.link_dismissed = start.map(|k| (head.para, k));
+                s.dirty |= dirty::TOOLS;
+            } else {
+                let t = target.clone();
+                accept_link_title(s, &t);
+            }
+            return true;
+        }
     }
     let mut chars = text.chars();
     if let (Some(ch), None) = (chars.next(), chars.next()) {
@@ -1044,5 +1090,128 @@ mod tests {
         // characters whose lower case is longer do not shift the offsets
         let u = Doc::from_markup("İx x");
         assert_eq!(hits(&u, "x"), vec![Pos { para: 0, off: 1 }, Pos { para: 0, off: 3 }]);
+    }
+}
+
+// ---- [[ page link suggestions --------------------------------------------------------------------
+
+/// Page titles that match the `[[query` before the caret: (target, label). The last entry offers to create
+/// a new page when nothing matches exactly.
+pub fn link_suggestions(s: &State) -> Vec<(String, String)> {
+    if !active(s) {
+        return vec![];
+    }
+    let Some(doc) = s.ws.as_ref().and_then(|w| w.page.doc.as_ref()) else { return vec![] };
+    let Some((start, q)) = notedoc::link_query(doc, s.dedit.ed.sel.head) else { return vec![] };
+    if s.dedit.ed.link_dismissed == Some((s.dedit.ed.sel.head.para, start)) {
+        return vec![];
+    }
+    let ql = q.trim().to_lowercase();
+    let me = s.ws.as_ref().map(|w| w.page.title.to_lowercase()).unwrap_or_default();
+    let mut titles: Vec<String> = s.ws.as_ref().map(|w| w.rows()).unwrap_or_default().into_iter().filter(|r| !r.is_section).map(|r| r.title).filter(|t| !t.trim().is_empty() && t.to_lowercase() != me && t.to_lowercase().contains(&ql)).collect();
+    titles.sort_by_key(|t| (!t.to_lowercase().starts_with(&ql), t.to_lowercase()));
+    titles.dedup();
+    titles.truncate(6);
+    let mut out: Vec<(String, String)> = titles.into_iter().map(|t| (t.clone(), t)).collect();
+    let exact = out.iter().any(|(t, _)| t.to_lowercase() == ql);
+    if !ql.is_empty() && !exact {
+        out.push((q.trim().to_string(), format!("New page “{}”", q.trim())));
+    }
+    out
+}
+
+/// Where the suggestion pop-up goes: the caret in canvas coordinates.
+pub fn caret_screen(s: &State) -> Option<(f32, f32)> {
+    let (x, y, h) = s.dedit.layout.caret(s.dedit.ed.sel.head)?;
+    Some(((x + s.dedit.x0) * s.view.scale + s.view.ox, (y + h + MARGIN_Y) * s.view.scale + s.view.oy + 4.0))
+}
+
+pub fn accept_link_title(s: &mut State, title: &str) {
+    snapshot(s, "");
+    let Some((doc, ed)) = doc_mut(s) else { return };
+    if let Some(pos) = notedoc::accept_link(doc, ed.sel.head, title) {
+        ed.sel = Sel::caret(pos);
+        ed.pending = None;
+    }
+    after_edit(s);
+}
+
+// ---- Markdown and plugins ----------------------------------------------------------------------
+
+/// Splice paragraphs in after the caret paragraph (an empty body paragraph is replaced).
+pub fn insert_paras(s: &mut State, paras: Vec<notedoc::Para>) {
+    if paras.is_empty() {
+        return;
+    }
+    let at = insertion_after(s, &[]);
+    let Some((doc, ed)) = doc_mut(s) else { return };
+    notedoc::ensure_not_empty(doc);
+    let at = at.min(doc.paras.len() - 1);
+    let replace = doc.paras[at].kind == notedoc::ParaKind::Body && doc.paras[at].runs.is_empty();
+    let n = paras.len();
+    for (k, mut p) in paras.into_iter().enumerate() {
+        p.id = doc.fresh_id();
+        doc.paras.insert(at + 1 + k, p);
+    }
+    let mut last = at + n;
+    if replace && doc.paras.len() > n + 1 {
+        doc.paras.remove(at);
+        last -= 1;
+    }
+    if last + 1 >= doc.paras.len() {
+        let id = doc.fresh_id();
+        doc.paras.push(notedoc::Para { id, kind: notedoc::ParaKind::Body, runs: vec![] });
+    }
+    ed.sel = Sel::caret(Pos { para: last + 1, off: 0 });
+}
+
+/// Insert Markdown at the caret as paragraphs.
+pub fn insert_markdown(s: &mut State, md: &str) {
+    let d = Doc::from_markdown(md);
+    snapshot(s, "");
+    insert_paras(s, d.paras);
+    after_edit(s);
+}
+
+/// Apply what a plugin asked for as one undo step. Returns the status message, if any.
+pub fn apply_plugin_actions(s: &mut State, actions: Vec<plugin::Action>) -> Option<String> {
+    let mut status = None;
+    snapshot(s, "");
+    for a in actions {
+        match a {
+            plugin::Action::InsertText { text } | plugin::Action::ReplaceSelection { text } => {
+                let Some((doc, ed)) = doc_mut(s) else { continue };
+                let (start, _) = ed.sel.ordered();
+                let style = notedoc::style_at(doc, start);
+                let pos = notedoc::insert_text(doc, ed.sel, &text, style);
+                ed.sel = Sel::caret(pos);
+            }
+            plugin::Action::InsertMarkdown { markdown } => insert_paras(s, Doc::from_markdown(&markdown).paras),
+            plugin::Action::Status { text } => status = Some(text),
+        }
+    }
+    after_edit(s);
+    status
+}
+
+/// What a plugin is told about the page.
+pub fn plugin_request(s: &State) -> plugin::Request {
+    let (title, text) = s.ws.as_ref().map(|w| (w.page.title.clone(), w.page.doc.as_ref().map(Doc::plain_text).unwrap_or_default())).unwrap_or_default();
+    plugin::Request { command: String::new(), selection: copy_text(s).unwrap_or_default(), page_title: title, text }
+}
+
+#[cfg(test)]
+mod md_paste_tests {
+    use super::looks_like_markdown;
+
+    #[test]
+    fn only_markdown_like_clipboards_are_converted() {
+        assert!(looks_like_markdown("# Title\n\ntext"));
+        assert!(looks_like_markdown("- [ ] task\n- [x] done"));
+        assert!(looks_like_markdown("see [[Page]]"));
+        assert!(looks_like_markdown("a\n**b**"));
+        assert!(!looks_like_markdown("just a sentence"));
+        assert!(!looks_like_markdown("two lines\nof plain text"));
+        assert!(!looks_like_markdown("5 * 3 = 15"));
     }
 }

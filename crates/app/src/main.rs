@@ -5,6 +5,8 @@ mod commands;
 mod docedit;
 mod graphview;
 mod menus;
+mod notegraph;
+mod vault;
 mod handwriting;
 mod headless;
 mod pagedoc;
@@ -64,6 +66,8 @@ pub enum Prompt {
     ReplaceWith(String),
     InlineMath,
     LinkTarget,
+    ExportVault,
+    ImportVault,
 }
 
 /// Which parts of the UI need refreshing after a state change.
@@ -157,6 +161,12 @@ pub struct State {
     pub mode_auto: bool,
     /// The last text searched with Find (the prompt is pre-filled with it).
     pub last_find: String,
+    pub plugins: Vec<plugin::Plugin>,
+    /// The tag whose pages the Tags screen is listing.
+    pub tag_pick: Option<String>,
+    pub note_graph: Option<notegraph::NoteGraph>,
+    pub ng_size: (f32, f32),
+    pub plugin_errors: Vec<String>,
     pub new_editor: bool,
     pub dedit: docedit::DocEdit,
 }
@@ -235,11 +245,17 @@ impl State {
             chip_dismissed: false,
             mode_auto: true,
             last_find: String::new(),
+            plugins: Vec::new(),
+            tag_pick: None,
+            note_graph: None,
+            ng_size: (900.0, 560.0),
+            plugin_errors: Vec::new(),
             new_editor: (settings.new_editor || std::env::var("SCRAWL_NEW_EDITOR").is_ok()) && std::env::var("SCRAWL_OLD_EDITOR").is_err(),
             dedit: docedit::DocEdit::new(Arc::new(render::MathCache::default())),
             settings,
         };
         st.width_from_pen(0);
+        st.reload_plugins();
         if st.new_editor {
             st.tool = Tool::TextBox;
         }
@@ -549,7 +565,10 @@ fn block_rows(st: &mut State, page: &store::Page, scale: f32) -> Vec<BlockRow> {
 
 fn refresh_doc(ui: &MainWindow, st: &mut State) {
     if st.new_editor {
-        return; // the old side panel is not shown
+        // the old side panel is not shown; only the "Linked from" strip needs data
+        let back = st.ws.as_mut().map(|w| w.backlinks()).unwrap_or_default();
+        ui.set_backlinks(model(back.into_iter().map(|(id, t)| ItemRow { id: id.into(), title: t.into(), detail: SharedString::new() }).collect()));
+        return;
     }
     let scale = ui.window().scale_factor();
     let Some(page) = st.ws.as_ref().map(|w| w.page.clone()) else { return };
@@ -594,6 +613,12 @@ fn refresh_tools(ui: &MainWindow, st: &State) {
         ui.set_fmt_underline(u);
         ui.set_para_kind(k.into());
         ui.set_obj_kind(docedit::object_kind(st).into());
+        let sug = docedit::link_suggestions(st);
+        ui.set_link_suggest(model(sug.into_iter().map(|(t, l)| ItemRow { id: t.into(), title: l.into(), detail: SharedString::new() }).collect()));
+        if let Some((x, y)) = docedit::caret_screen(st) {
+            ui.set_link_x(x);
+            ui.set_link_y(y);
+        }
         let (cu, cr) = docedit::can_undo(st);
         ui.set_doc_can_undo(cu);
         ui.set_doc_can_redo(cr);
@@ -1039,7 +1064,22 @@ fn main() -> Result<(), slint::PlatformError> {
             handled
         });
     }
-    ui.on_open_menu(with!(|ui, _s, name = SharedString| {
+    ui.on_note_graph_resized(with!(|ui, s, w = f32, h = f32| {
+        if w > 50.0 && h > 50.0 && ((w - s.ng_size.0).abs() > 1.0 || (h - s.ng_size.1).abs() > 1.0 || s.overlay == "notegraph") {
+            s.ng_size = (w, h);
+            refresh_note_graph(&ui, s);
+        }
+    }));
+    ui.on_note_graph_click(with!(|ui, s, fx = f32, fy = f32| {
+        let title = s.note_graph.as_ref().and_then(|g| g.hit(fx, fy, s.ng_size.0, s.ng_size.1, 10.0).map(|i| g.nodes[i].title.clone()));
+        if let Some(t) = title {
+            ui.set_overlay("".into());
+            s.overlay.clear();
+            ui.invoke_focus_canvas();
+            actions::follow_link(s, &t);
+        }
+    }));
+    ui.on_open_menu(with!(|ui, s, name = SharedString| {
         if ui.get_menu() == name {
             ui.set_menu("".into());
         } else {
@@ -1051,6 +1091,16 @@ fn main() -> Result<(), slint::PlatformError> {
                     last = it.group;
                 }
                 rows.push(MenuRow { id: it.id.into(), label: it.label.into(), hint: it.hint.into(), header: false });
+            }
+            if name == "more" {
+                let mut last_plugin = String::new();
+                for (id, title, plugin) in s.plugin_commands() {
+                    if last_plugin.is_empty() {
+                        rows.push(MenuRow { id: "".into(), label: "Plugins".into(), hint: "".into(), header: true });
+                    }
+                    last_plugin = plugin.clone();
+                    rows.push(MenuRow { id: id.into(), label: title.into(), hint: plugin.into(), header: false });
+                }
             }
             ui.set_menu_items(model(rows));
             ui.set_menu(name);
@@ -1554,6 +1604,84 @@ fn run_scene(ui: &MainWindow, st: &Rc<RefCell<State>>, scene: &str) {
                 assert_eq!(words(st), "startx");
                 println!("undo order: ok");
             }
+            "linksuggest" => {
+                ui.invoke_run_command("quick-note".into());
+                {
+                    let s = &mut *st.borrow_mut();
+                    s.new_editor = true;
+                    s.tool = Tool::TextBox;
+                    if let Some(ws) = &mut s.ws {
+                        ws.page.doc = Some(notedoc::Doc::from_markup("Related reading: "));
+                    }
+                    s.dirty |= dirty::CANVAS | dirty::TOOLS;
+                    flush(ui, s);
+                }
+                ui.invoke_pointer_down(300.0, 60.0);
+                ui.invoke_pointer_up();
+                ui.invoke_doc_key("\u{F72B}".into(), false, false, false, false);
+                for c in "[[W".chars() {
+                    ui.invoke_doc_key(c.to_string().into(), false, false, false, false);
+                }
+                assert!(ui.invoke_doc_key("\t".into(), false, false, false, false), "Tab takes the first suggestion");
+                let s = st.borrow();
+                let d = s.ws.as_ref().and_then(|w| w.page.doc.as_ref()).unwrap();
+                assert_eq!(d.plain_text(), "Related reading: Welcome to Scrawl", "{:?}", d.paras);
+                drop(s);
+                for c in " and [[Zeta".chars() {
+                    ui.invoke_doc_key(c.to_string().into(), false, false, false, false);
+                }
+            }
+            "plugins" => {
+                {
+                    let s = &mut *st.borrow_mut();
+                    s.new_editor = true;
+                    s.tool = Tool::TextBox;
+                    let dir = plugins_dir().join("starter-snippets");
+                    std::fs::create_dir_all(&dir).unwrap();
+                    std::fs::write(dir.join("plugin.json"), include_str!("../starter/plugin.json")).unwrap();
+                    s.reload_plugins();
+                    assert_eq!(s.plugins.len(), 1, "{:?}", s.plugin_errors);
+                    if let Some(ws) = &mut s.ws {
+                        ws.page.doc = Some(notedoc::Doc::from_markup("= Standup"));
+                    }
+                    s.dirty |= dirty::CANVAS | dirty::TOOLS;
+                    flush(ui, s);
+                }
+                ui.invoke_run_command("plugin:starter-snippets:snippet:meeting".into());
+                {
+                    let s = st.borrow();
+                    let d = s.ws.as_ref().and_then(|w| w.page.doc.as_ref()).unwrap();
+                    assert!(d.plain_text().contains("Agenda") && d.paras.iter().any(|p| matches!(p.kind, notedoc::ParaKind::Check { .. })), "{:?}", d.paras);
+                }
+                ui.invoke_run_command("undo".into());
+                assert_eq!(st.borrow().ws.as_ref().and_then(|w| w.page.doc.as_ref()).unwrap().plain_text(), "Standup", "one undo removes the whole snippet");
+                ui.invoke_run_command("plugin:starter-snippets:snippet:meeting".into());
+                ui.invoke_run_command("plugins".into());
+            }
+            "notegraph" => {
+                {
+                    let s = &mut *st.borrow_mut();
+                    s.new_editor = true;
+                    if let Some(ws) = &mut s.ws {
+                        let sec = ws.nb.sections[0].id.clone();
+                        let spec: [(&str, &str); 8] = [("Calculus", "[[Limits]] [[Derivatives]] [[Integrals]] #math"), ("Limits", "[[Calculus]] [[Series]]"), ("Derivatives", "[[Chain rule]] [[Calculus]]"), ("Chain rule", "[[Derivatives]]"), ("Integrals", "[[Calculus]] [[Series]]"), ("Series", "[[Limits]] [[Integrals]] [[Taylor]]"), ("Lonely note", "nothing links here"), ("Reading list", "[[Calculus]] [[Missing book]]")];
+                        for (t, md) in spec {
+                            let mut p = store::Page::new(&store::new_id(), t, "2026-11-10");
+                            p.doc = Some(notedoc::Doc::from_markup(md));
+                            p.sync_blocks();
+                            ws.store.create_page(&mut ws.nb, &sec, p, &ws.vault).unwrap();
+                        }
+                    }
+                }
+                ui.invoke_run_command("note-graph".into());
+                {
+                    let s = st.borrow();
+                    let g = s.note_graph.as_ref().expect("graph built");
+                    assert_eq!(g.nodes.len(), 11, "welcome page + 8 pages + 2 unresolved links");
+                    assert!(g.nodes.iter().any(|n| n.title == "Taylor" && !n.exists));
+                    assert_eq!(g.edges.len(), 9, "each pair of linked notes is one line");
+                }
+            }
             "menu" => ui.invoke_open_menu("insert".into()),
             "menumore" => ui.invoke_open_menu("more".into()),
             "drawer" => ui.set_drawer_open(true),
@@ -1733,6 +1861,59 @@ fn looks_like_words(text: &str, sp: Option<&pagedoc::Speller>, symbols: usize) -
     let Some(sp) = sp else { return false };
     let words: Vec<&str> = text.split_whitespace().collect();
     symbols >= 2 && !words.is_empty() && words.iter().all(|w| w.chars().count() >= 2 && w.chars().all(char::is_alphabetic) && sp.is_word(&w.to_lowercase()))
+}
+
+/// Plugins live next to the notes: `Scrawl/plugins/<name>/plugin.json`.
+pub fn plugins_dir() -> std::path::PathBuf {
+    workspace::default_root().join("plugins")
+}
+
+/// First start: put the starter snippet pack in place so the plugin menu is not empty.
+fn ensure_starter_plugin() {
+    let dir = plugins_dir();
+    if dir.exists() || std::env::var_os("SCRAWL_SHOT").is_some() {
+        return;
+    }
+    let target = dir.join("starter-snippets");
+    if std::fs::create_dir_all(&target).is_ok() {
+        let _ = std::fs::write(target.join("plugin.json"), include_str!("../starter/plugin.json"));
+    }
+}
+
+impl State {
+    pub fn reload_plugins(&mut self) {
+        ensure_starter_plugin();
+        let (ok, errors) = plugin::load_all(&plugins_dir());
+        self.plugins = ok;
+        self.plugin_errors = errors;
+    }
+
+    /// (id, title, plugin name) of every command of the plugins that are switched on.
+    pub fn plugin_commands(&self) -> Vec<(String, String, String)> {
+        let mut out = Vec::new();
+        for p in self.plugins.iter().filter(|p| !self.settings.disabled_plugins.contains(&p.manifest.name)) {
+            for c in &p.manifest.commands {
+                out.push((format!("plugin:{}:{}", p.manifest.name, c.id), c.title.clone(), p.manifest.name.clone()));
+            }
+            for sn in &p.manifest.snippets {
+                out.push((format!("plugin:{}:snippet:{}", p.manifest.name, sn.id), sn.title.clone(), p.manifest.name.clone()));
+            }
+        }
+        out
+    }
+}
+
+/// Redraw the note graph picture and its labels for the current card size.
+pub fn refresh_note_graph(ui: &MainWindow, st: &State) {
+    let Some(g) = &st.note_graph else { return };
+    let scale = ui.window().scale_factor();
+    let c = st.settings.colors();
+    let (w, h) = st.ng_size;
+    let Some((pm, labels)) = g.render(w, h, scale, c.text, c.muted, c.accent) else { return };
+    let mut buf = SharedPixelBuffer::<slint::Rgba8Pixel>::new(pm.width(), pm.height());
+    buf.make_mut_bytes().copy_from_slice(pm.data());
+    ui.set_note_graph_frame(slint::Image::from_rgba8_premultiplied(buf));
+    ui.set_note_graph_labels(model(labels.into_iter().map(|(x, y, t)| LabelRow { x, y, text: t.into() }).collect()));
 }
 
 #[cfg(test)]

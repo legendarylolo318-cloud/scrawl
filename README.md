@@ -12,6 +12,10 @@ handwriting into text or typeset math in place. Linux and Windows. No Chromium, 
 
 ## What works today
 
+- **Obsidian-style linking:** `[[wiki links]]` with suggestions, backlinks, a graph of linked notes, `#tags`, Markdown
+  vault export and import ([`docs/obsidian.md`](docs/obsidian.md)).
+- **Plugins:** sandboxed WebAssembly plugins (write them in Rust) and no-code snippet packs
+  ([`docs/plugins.md`](docs/plugins.md)).
 - Ink canvas: pen, highlighter, eraser, smoothing, scribble-to-delete, undo/redo, zoom/pan, paper backgrounds.
 - Recognition: 191 classes (digits, Latin, Greek, operators, relations, calculus, sets/logic, arrows, blackboard bold...),
   90.5 % top-1 / 99.5 % top-5 on the HASYv2 test split, under 1 ms per symbol on CPU, 2.9 MB model.

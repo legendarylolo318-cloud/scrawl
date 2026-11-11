@@ -1,5 +1,15 @@
 # Scrawl handoff
 
+## Obsidian features and plugins (latest)
+
+Built: `notedoc::md` (Markdown <-> document, `hashtags`, front matter), `[[` suggestions and `]]` auto-link
+(`docedit.rs`, `notedoc::edit`), Linked-from strip, `notegraph.rs`, tags overlays, `vault.rs` (export/import), `crates/plugin`
+(manifest, wasmi sandbox, actions) + Plugins screen, starter snippet pack (`crates/app/starter`). Docs: `docs/obsidian.md`,
+`docs/plugins.md`. Known gaps: no embeds of notes (`![[Note]]`), no block ids/footnotes, ink and audio are not exported to
+Markdown, tag list is not shown in the sidebar, graph has no zoom/drag, plugin sample in Rust was only unit-tested natively
+(the `wasm32` build was not run here), vault import does not merge into an existing notebook (always a new one),
+backlinks only see pages saved to disk.
+
 ## UI redesign status (read this first)
 
 See `docs/ui-redesign.md` (plan) and `CHANGELOG.md`. Built: `crates/doc` (package `notedoc`: model, Typst conversion,

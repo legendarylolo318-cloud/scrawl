@@ -1,0 +1,13 @@
+{
+  "name": "text-tools",
+  "version": "1.0.0",
+  "description": "Upper case, title case, sort lines, lines to tasks, count words (a Rust plugin)",
+  "wasm": "text_tools.wasm",
+  "commands": [
+    { "id": "upper", "title": "Selection to UPPER CASE" },
+    { "id": "title-case", "title": "Selection to Title Case" },
+    { "id": "sort-lines", "title": "Sort the selected lines" },
+    { "id": "lines-to-tasks", "title": "Selected lines to a checklist" },
+    { "id": "count", "title": "Count words in the selection or page" }
+  ]
+}
