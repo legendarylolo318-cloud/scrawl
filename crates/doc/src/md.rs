@@ -59,8 +59,10 @@ impl Doc {
 
 fn md_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        if matches!(c, '\\' | '*' | '_' | '`' | '[' | ']' | '<' | '>' | '$' | '|' | '~') {
+    let mut it = s.chars().peekable();
+    while let Some(c) = it.next() {
+        // "==" is a highlight mark when read back, so a "=" followed by another one is escaped
+        if matches!(c, '\\' | '*' | '_' | '`' | '[' | ']' | '<' | '>' | '$' | '|' | '~') || (c == '=' && it.peek() == Some(&'=')) {
             out.push('\\');
         }
         out.push(c);
@@ -112,7 +114,8 @@ impl Doc {
                     let b = body();
                     // keep text that merely looks like a list or heading literal
                     let t = b.trim_start();
-                    if t.starts_with(['#', '-', '+', '>']) || t.split_once(". ").is_some_and(|(n, _)| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit())) {
+                    let digits = |n: &str| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit());
+                    if t.starts_with(['#', '-', '+', '>']) || t.split_once(". ").is_some_and(|(n, _)| digits(n)) || t.strip_suffix('.').is_some_and(digits) {
                         format!("\\{b}")
                     } else {
                         b
@@ -170,6 +173,7 @@ fn callout_of(tag: &str) -> Option<CalloutKind> {
 
 /// Split `---` front matter from the body.
 pub fn front_matter(src: &str) -> (MdMeta, &str) {
+    let src = src.strip_prefix('\u{feff}').unwrap_or(src);
     let mut meta = MdMeta::default();
     let Some(rest) = src.strip_prefix("---\n").or_else(|| src.strip_prefix("---\r\n")) else { return (meta, src) };
     let Some(end) = rest.find("\n---") else { return (meta, src) };
@@ -205,18 +209,63 @@ pub fn front_matter(src: &str) -> (MdMeta, &str) {
 struct Scan<'a> {
     c: &'a [char],
     i: usize,
+    /// Last search per pattern: (searched from, found at). Searches only move forward, so remembering
+    /// them keeps a long line linear instead of quadratic.
+    memo: std::collections::HashMap<&'static str, (usize, Option<usize>)>,
 }
 
 impl Scan<'_> {
-    fn find(&self, from: usize, pat: &str) -> Option<usize> {
-        let p: Vec<char> = pat.chars().collect();
-        (from..self.c.len().saturating_sub(p.len() - 1)).find(|&j| self.c[j..j + p.len()] == p[..])
+    fn at(&self, pat: &str) -> bool {
+        (self.i..).zip(pat.chars()).all(|(k, p)| self.c.get(k) == Some(&p))
     }
+
+    /// First position >= `from` where `pat` starts (for "$": a "$" not right after a space).
+    fn find(&mut self, from: usize, pat: &'static str) -> Option<usize> {
+        if let Some(&(f0, hit)) = self.memo.get(pat) {
+            if from >= f0 && hit.is_none_or(|h| from <= h) {
+                return hit;
+            }
+        }
+        let p: Vec<char> = pat.chars().collect();
+        let c = self.c;
+        let hit = (from..c.len().saturating_sub(p.len() - 1)).find(|&j| c[j..j + p.len()] == p[..] && (pat != "$" || j == 0 || !c[j - 1].is_whitespace()) && (pat != "]" || j == 0 || c[j - 1] != '\\'));
+        self.memo.insert(pat, (from, hit));
+        hit
+    }
+}
+
+/// End of a Markdown link URL starting at `from`: the `)` that balances, at most 4096 characters on.
+fn url_end(c: &[char], from: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for (j, &ch) in c.iter().enumerate().skip(from).take(4096) {
+        match ch {
+            '(' => depth += 1,
+            ')' if depth == 0 => return Some(j),
+            ')' => depth -= 1,
+            ' ' => return None,
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Text with Markdown backslash escapes removed.
+fn unescape(s: &[char]) -> String {
+    let mut out = String::new();
+    let mut k = 0;
+    while k < s.len() {
+        if s[k] == '\\' && k + 1 < s.len() {
+            k += 1;
+        }
+        out.push(s[k]);
+        k += 1;
+    }
+    out
 }
 
 fn inline_runs(text: &str) -> Vec<Run> {
     let c: Vec<char> = text.chars().collect();
-    let mut sc = Scan { c: &c, i: 0 };
+    let mut sc = Scan { c: &c, i: 0, memo: Default::default() };
     let mut runs: Vec<Run> = Vec::new();
     let mut buf = String::new();
     let mut st = Style::default();
@@ -227,11 +276,10 @@ fn inline_runs(text: &str) -> Vec<Run> {
     };
     while sc.i < c.len() {
         let ch = c[sc.i];
-        let rest2 = |s: &str| sc.find(sc.i, s) == Some(sc.i);
         if ch == '\\' && sc.i + 1 < c.len() {
             buf.push(c[sc.i + 1]);
             sc.i += 2;
-        } else if rest2("[[") {
+        } else if sc.at("[[") {
             if let Some(end) = sc.find(sc.i + 2, "]]") {
                 let inner: String = c[sc.i + 2..end].iter().collect();
                 let (target, label) = inner.split_once('|').map_or((inner.as_str(), inner.as_str()), |(a, b)| (a, b));
@@ -258,7 +306,7 @@ fn inline_runs(text: &str) -> Vec<Run> {
                 sc.i += 1;
             }
         } else if ch == '$' && sc.i + 1 < c.len() && c[sc.i + 1] != '$' && !c[sc.i + 1].is_whitespace() {
-            match (sc.i + 1..c.len()).find(|&j| c[j] == '$' && !c[j - 1].is_whitespace()) {
+            match sc.find(sc.i + 1, "$") {
                 Some(end) => {
                     flush(&mut buf, &mut runs, st);
                     let latex: String = c[sc.i + 1..end].iter().collect();
@@ -273,12 +321,13 @@ fn inline_runs(text: &str) -> Vec<Run> {
             }
         } else if ch == '[' {
             // [text](url)
-            let close = c[sc.i..].iter().position(|&x| x == ']').map(|p| sc.i + p);
+            let close = sc.find(sc.i + 1, "]");
             match close {
-                Some(cl) if c.get(cl + 1) == Some(&'(') => match (cl + 2..c.len()).find(|&j| c[j] == ')') {
+                // the URL ends at the ")" that balances its "(" (links like `wiki/A_(b)` are common)
+                Some(cl) if c.get(cl + 1) == Some(&'(') => match url_end(&c, cl + 2) {
                     Some(pe) => {
                         flush(&mut buf, &mut runs, st);
-                        let label: String = c[sc.i + 1..cl].iter().collect();
+                        let label = unescape(&c[sc.i + 1..cl]);
                         let url: String = c[cl + 2..pe].iter().collect();
                         runs.push(Run::Text { text: label, style: st, link: Some(Link::Url(url)) });
                         sc.i = pe + 1;
@@ -293,7 +342,7 @@ fn inline_runs(text: &str) -> Vec<Run> {
                     sc.i += 1;
                 }
             }
-        } else if rest2("**") || rest2("__") {
+        } else if sc.at("**") || sc.at("__") {
             flush(&mut buf, &mut runs, st);
             st.bold = !st.bold;
             sc.i += 2;
@@ -301,15 +350,15 @@ fn inline_runs(text: &str) -> Vec<Run> {
             flush(&mut buf, &mut runs, st);
             st.italic = !st.italic;
             sc.i += 1;
-        } else if rest2("<u>") {
+        } else if sc.at("<u>") {
             flush(&mut buf, &mut runs, st);
             st.underline = true;
             sc.i += 3;
-        } else if rest2("</u>") {
+        } else if sc.at("</u>") {
             flush(&mut buf, &mut runs, st);
             st.underline = false;
             sc.i += 4;
-        } else if rest2("==") || rest2("~~") {
+        } else if sc.at("==") || sc.at("~~") {
             sc.i += 2; // highlight and strike-through marks are dropped, the text stays
         } else {
             buf.push(ch);
@@ -387,7 +436,8 @@ impl Doc {
                     }
                     (acc.join("\n").trim().to_string(), (j + 1).min(lines.len()))
                 };
-                let typst = layout::latex_to_typst(&latex);
+                // Obsidian writes LaTeX; Scrawl's own export writes the Typst source, which must stay as it is
+                let typst = if layout::looks_like_latex(&latex) { layout::latex_to_typst(&latex) } else { latex };
                 d.push(ParaKind::MathDisplay { expr: Expr::Row(vec![]), source: Some(typst) }, vec![]);
                 i = next;
                 continue;
@@ -552,5 +602,65 @@ mod line_tests {
         assert_eq!(kinds, vec![&ParaKind::Body, &ParaKind::Body, &ParaKind::Bullet { indent: 0 }, &ParaKind::Check { done: false }, &ParaKind::Numbered { indent: 0 }, &ParaKind::Check { done: false }]);
         assert_eq!(d.paras[0].plain(), "Date:");
         assert_eq!(d.paras[5].plain(), "real");
+    }
+}
+
+#[cfg(test)]
+mod round_trip_tests {
+    use super::*;
+
+    fn name(s: &str) -> String {
+        s.to_string()
+    }
+
+    fn round(d: &Doc) -> Doc {
+        Doc::from_markdown(&d.to_markdown(&name, &name))
+    }
+
+    #[test]
+    fn body_text_survives_markdown_round_trips() {
+        // "==" was dropped (taken for a highlight mark) and "2024." became an empty numbered item
+        for t in ["a == b", "==", "x === y", "2024.", "1.", "12.5", "x ~~ y", "a_ b", "C# and #1", "x | y", "50% * 3", "[x](y)", "a]] b", "  - x", "\\", "a\\b"] {
+            let mut d = Doc::new();
+            d.push(ParaKind::Body, vec![Run::plain(t)]);
+            let back = round(&d);
+            assert_eq!(back.paras.len(), 1, "{t:?}");
+            assert_eq!(back.paras[0].kind, ParaKind::Body, "{t:?}");
+            assert_eq!(back.paras[0].plain(), t);
+        }
+    }
+
+    #[test]
+    fn url_links_and_typst_display_math_survive_round_trips() {
+        let mut d = Doc::new();
+        d.push(ParaKind::Body, vec![Run::Text { text: "a_b *c*".into(), style: Style::default(), link: Some(Link::Url("https://x.org/a_(b)".into())) }]);
+        d.push(ParaKind::MathDisplay { expr: Expr::Row(vec![]), source: Some("sum_(i=1)^n frac(a, b)".into()) }, vec![]);
+        let back = round(&d);
+        assert_eq!(back.paras[0].runs, d.paras[0].runs);
+        assert_eq!(back.paras[1].kind, d.paras[1].kind);
+        // LaTeX from Obsidian is still converted
+        let o = Doc::from_markdown("$$\n\\frac{a}{b}\n$$");
+        assert!(matches!(&o.paras[0].kind, ParaKind::MathDisplay { source: Some(s), .. } if s.contains("frac") && !s.contains('\\')));
+    }
+
+    #[test]
+    fn a_byte_order_mark_does_not_hide_front_matter_or_headings() {
+        let (m, body) = front_matter("\u{feff}---\ntitle: T\n---\n# H");
+        assert_eq!(m.title.as_deref(), Some("T"));
+        assert_eq!(body, "# H");
+        let d = Doc::from_markdown("\u{feff}# Heading");
+        assert!(matches!(d.paras[0].kind, ParaKind::Heading(1)), "{:?}", d.paras[0]);
+        assert_eq!(d.paras[0].plain(), "Heading");
+    }
+
+    #[test]
+    fn long_lines_parse_in_linear_time() {
+        // a 100 000 character line took 50 s (every character searched the rest of the line)
+        for line in ["word ".repeat(40_000), "[[a ".repeat(40_000), "`a [b ".repeat(30_000), "$a [x](y ".repeat(20_000)] {
+            let t = std::time::Instant::now();
+            let d = Doc::from_markdown(&line);
+            assert!(!d.paras.is_empty());
+            assert!(t.elapsed().as_millis() < 1500, "{:?} for {}", t.elapsed(), &line[..8]);
+        }
     }
 }

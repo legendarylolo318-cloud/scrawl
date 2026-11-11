@@ -13,6 +13,9 @@
 ### Fixed (bug check)
 - Plugins: a module declaring a huge table (4 billion entries) made Scrawl allocate about 16 GB and freeze;
   tables are now capped at 100 000 entries per table.
+- Markdown: text with `==` lost it, a line such as `2024.` came back as an empty numbered item, Typst display
+  math was mangled on re-import, URL links with `(` `)` were cut and kept backslashes in their label, a byte-order
+  mark hid the front matter, and a long line (100 000 characters) took 50 s to read. All fixed, with tests.
 
 ## 1.1.1 (2026-11-10): better handwriting-to-text
 
