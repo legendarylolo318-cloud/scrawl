@@ -572,7 +572,13 @@ impl Workspace {
         }
         let link = format!("[[{}]]", title.to_lowercase());
         let me = self.page.id.clone();
-        let hits = self.search(&title.replace(['"', ':', '(', ')', '[', ']'], " "));
+        // every page that mentions the title, not only the best-ranked 30: pages that talk about it a lot would
+        // otherwise push the ones that merely link to it out of the list
+        let all = self.nb.sections.iter().map(|s| s.pages.len()).sum::<usize>().clamp(30, 5000);
+        self.ensure_index();
+        let (q, mut f) = parse_query(&title.replace(['"', ':', '(', ')', '[', ']'], " "));
+        f.notebook = Some(self.nb.id.clone());
+        let hits = self.index.as_ref().and_then(|ix| ix.search(&q, &f, all).ok()).unwrap_or_default();
         hits.into_iter()
             .filter(|h| h.page_id != me)
             .filter_map(|h| {
@@ -856,5 +862,43 @@ impl Workspace {
         let mut v: Vec<_> = map.into_iter().collect();
         v.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then(a.0.cmp(&b.0)));
         v
+    }
+}
+
+#[cfg(test)]
+mod backlink_tests {
+    use super::*;
+
+    #[test]
+    fn backlinks_are_found_even_when_many_pages_mention_the_title() {
+        let root = std::env::temp_dir().join(format!("scrawl-backlinks-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let mut ws = Workspace::open_with(&root, None, None).unwrap();
+        let sec = ws.nb.sections[0].id.clone();
+        let mk = |t: &str, md: &str| {
+            let mut p = Page::new(&store::new_id(), t, "2026-11-11");
+            p.doc = Some(notedoc::Doc::from_markdown(md));
+            p.sync_blocks();
+            p
+        };
+        // 60 pages that talk about calculus a lot (they rank first) and one long page that links to it once
+        for i in 0..60 {
+            let p = mk(&format!("Mention {i}"), "calculus calculus calculus");
+            ws.store.create_page(&mut ws.nb, &sec, p, &ws.vault).unwrap();
+        }
+        let filler = "words about something else entirely. ".repeat(80);
+        let p = mk("Linker", &format!("{filler} see [[calculus#Limits|the main page]] {filler}"));
+        ws.store.create_page(&mut ws.nb, &sec, p, &ws.vault).unwrap();
+        let p = mk("Calculus", "the hub");
+        let id = p.id.clone();
+        ws.store.create_page(&mut ws.nb, &sec, p, &ws.vault).unwrap();
+        ws.store.save_notebook(&ws.nb, &ws.vault).unwrap();
+        ws.index = None;
+        ws.open_page(&id, 1).unwrap();
+        let t = std::time::Instant::now();
+        let back = ws.backlinks();
+        eprintln!("backlinks over 62 pages: {:?}", t.elapsed());
+        assert_eq!(back.iter().map(|b| b.1.as_str()).collect::<Vec<_>>(), vec!["Linker"]);
+        std::fs::remove_dir_all(root).ok();
     }
 }
