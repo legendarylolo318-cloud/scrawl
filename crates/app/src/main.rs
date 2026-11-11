@@ -1631,6 +1631,59 @@ fn run_scene(ui: &MainWindow, st: &Rc<RefCell<State>>, scene: &str) {
                     ui.invoke_doc_key(c.to_string().into(), false, false, false, false);
                 }
             }
+            "pluginedge" => {
+                // a plugin that only reports, a plugin that fails, and a snippet of 5000 paragraphs
+                let dir = plugins_dir();
+                let status = dir.join("status-only");
+                std::fs::create_dir_all(&status).unwrap();
+                std::fs::write(status.join("plugin.json"), r#"{"name":"status-only","wasm":"p.wat","commands":[{"id":"go","title":"Go"},{"id":"bad","title":"Bad"}]}"#).unwrap();
+                std::fs::write(status.join("p.wat"), r#"(module (memory (export "memory") 1)
+                  (data (i32.const 64) "{\"actions\":[{\"op\":\"status\",\"text\":\"just saying\"}]}")
+                  (func (export "alloc") (param i32) (result i32) (i32.const 1024))
+                  (func (export "scrawl_run") (param i32 i32) (result i64)
+                    (if (i32.eq (i32.load8_u (i32.const 1036)) (i32.const 98)) (then unreachable))
+                    (i64.or (i64.shl (i64.const 64) (i64.const 32)) (i64.const 50))))"#).unwrap();
+                let big = dir.join("big-snippet");
+                std::fs::create_dir_all(&big).unwrap();
+                let md: String = (0..5000).map(|i| format!("- [ ] item {i} with [[Link {}]] and $x^{}$\n", i % 50, i % 9)).collect();
+                std::fs::write(big.join("plugin.json"), serde_json::json!({"name": "big-snippet", "snippets": [{"id": "all", "title": "All", "markdown": md}]}).to_string()).unwrap();
+                {
+                    let s = &mut *st.borrow_mut();
+                    s.new_editor = true;
+                    s.tool = Tool::TextBox;
+                    s.reload_plugins();
+                    assert!(s.plugin_errors.is_empty(), "{:?}", s.plugin_errors);
+                    if let Some(ws) = &mut s.ws {
+                        ws.page.doc = Some(notedoc::Doc::from_markup("Start "));
+                    }
+                    s.dirty |= dirty::CANVAS | dirty::TOOLS;
+                    flush(ui, s);
+                }
+                ui.invoke_pointer_down(300.0, 60.0);
+                ui.invoke_pointer_up();
+                ui.invoke_doc_key("\u{F72B}".into(), false, false, false, false);
+                for c in "abc".chars() {
+                    ui.invoke_doc_key(c.to_string().into(), false, false, false, false);
+                }
+                let text = |st: &Rc<RefCell<State>>| st.borrow().ws.as_ref().and_then(|w| w.page.doc.as_ref()).map(|d| d.plain_text()).unwrap_or_default();
+                assert_eq!(text(st), "Start abc");
+                ui.invoke_run_command("plugin:status-only:go".into());
+                assert_eq!(st.borrow().status, "just saying");
+                ui.invoke_run_command("plugin:status-only:bad".into());
+                assert!(st.borrow().status.contains("failed"), "{}", st.borrow().status);
+                ui.invoke_run_command("undo".into());
+                assert_eq!(text(st), "Start ", "one Ctrl+Z undoes the typing: plugins that changed nothing add no undo step");
+                let t = std::time::Instant::now();
+                ui.invoke_run_command("plugin:big-snippet:snippet:all".into());
+                let took = t.elapsed();
+                let n = st.borrow().ws.as_ref().and_then(|w| w.page.doc.as_ref()).map(|d| d.paras.len()).unwrap_or(0);
+                eprintln!("5000-paragraph snippet: {n} paragraphs in {took:?}");
+                assert!(n >= 5000);
+                let t = std::time::Instant::now();
+                ui.invoke_run_command("undo".into());
+                eprintln!("undo: {:?}", t.elapsed());
+                assert_eq!(text(st), "Start ", "one Ctrl+Z removes the whole snippet");
+            }
             "tagtyping" => {
                 // typing "#calculus " must add one tag, not "c", "ca", "cal", ...
                 ui.invoke_run_command("quick-note".into());

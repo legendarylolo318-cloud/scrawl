@@ -504,3 +504,66 @@ mod import_bug_tests {
         assert_eq!(safe_name("console"), "console");
     }
 }
+
+/// `SCRAWL_VAULT_CHECK=<copy of the notes folder> cargo test -p scrawl --release vault_round_trip_real_notes -- --ignored`
+/// Exports every unencrypted notebook of the copy as a vault, imports it again and compares each page's
+/// text and tags. Never point it at the real notes folder: it writes into the folder it is given.
+#[cfg(test)]
+mod real_notes {
+    use super::*;
+
+    #[test]
+    #[ignore]
+    fn vault_round_trip_real_notes() {
+        let Some(root) = std::env::var_os("SCRAWL_VAULT_CHECK").map(PathBuf::from) else { return };
+        let out = std::env::temp_dir().join(format!("scrawl-vault-real-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&out);
+        let mut ws = Workspace::open_with(&root, None, None).unwrap();
+        let squash = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+        let (mut pages, mut problems) = (0, Vec::new());
+        for nb in ws.notebooks() {
+            if nb.encrypted || nb.display_name.as_deref().unwrap_or("").ends_with("(imported)") {
+                continue;
+            }
+            ws.switch_notebook(&nb.id, None, 1).unwrap();
+            let mut before: Vec<(String, String, Vec<String>)> = Vec::new();
+            for s in ws.nb.sections.clone() {
+                for p in &s.pages {
+                    let mut page = if p.id == ws.page.id { ws.page.clone() } else { ws.load_other(&p.id).unwrap() };
+                    page.ensure_doc();
+                    let d = page.doc.unwrap();
+                    let mut tags = page.tags.clone();
+                    tags.extend(d.hashtags());
+                    tags.sort();
+                    tags.dedup();
+                    before.push((page.title.trim().to_string(), squash(&d.plain_text()), tags));
+                }
+            }
+            let (rep, dir) = export(&mut ws, &out).unwrap();
+            let r = import(&mut ws, &dir, 2).unwrap();
+            assert_eq!(r.pages, rep.pages, "{rep:?} {r:?}");
+            for (title, text, tags) in before {
+                pages += 1;
+                let Some(id) = ws.page_by_title(&title) else {
+                    problems.push(format!("{title}: missing after import"));
+                    continue;
+                };
+                let p = ws.load_other(&id).unwrap();
+                let d = p.doc.unwrap();
+                let mut t2 = p.tags.clone();
+                t2.sort();
+                t2.dedup();
+                // images become `![[...]]` and come back as image objects (no text)
+                if squash(&d.plain_text()) != text {
+                    problems.push(format!("{title}: text differs\n  before: {text:?}\n  after:  {:?}", squash(&d.plain_text())));
+                }
+                if t2 != tags {
+                    problems.push(format!("{title}: tags {tags:?} -> {t2:?}"));
+                }
+            }
+        }
+        std::fs::remove_dir_all(&out).ok();
+        eprintln!("checked {pages} pages");
+        assert!(problems.is_empty(), "{}", problems.join("\n"));
+    }
+}

@@ -26,6 +26,8 @@
   link with a space at the end of its text glued words together, and italics inside a word (`wo*rd*s`) were
   not read. Typst: indented text such as ` - x` was exported as a bullet.
 - Tags: typing `#calculus` added every prefix as a tag (`c`, `ca`, `cal`, ...). Only the finished tag stays now.
+- Plugins: a command that only shows a message no longer adds an empty undo step (the next Ctrl+Z seemed to do
+  nothing).
 
 ## 1.1.1 (2026-11-10): better handwriting-to-text
 

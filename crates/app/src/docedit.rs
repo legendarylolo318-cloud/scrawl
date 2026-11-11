@@ -1174,7 +1174,11 @@ pub fn insert_markdown(s: &mut State, md: &str) {
 /// Apply what a plugin asked for as one undo step. Returns the status message, if any.
 pub fn apply_plugin_actions(s: &mut State, actions: Vec<plugin::Action>) -> Option<String> {
     let mut status = None;
-    snapshot(s, "");
+    // an answer that only reports something must not leave an empty undo step behind
+    let edits = actions.iter().any(|a| !matches!(a, plugin::Action::Status { .. }));
+    if edits {
+        snapshot(s, "");
+    }
     for a in actions {
         match a {
             plugin::Action::InsertText { text } | plugin::Action::ReplaceSelection { text } => {
@@ -1188,7 +1192,9 @@ pub fn apply_plugin_actions(s: &mut State, actions: Vec<plugin::Action>) -> Opti
             plugin::Action::Status { text } => status = Some(text),
         }
     }
-    after_edit(s);
+    if edits {
+        after_edit(s);
+    }
     status
 }
 
