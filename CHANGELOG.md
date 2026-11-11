@@ -21,6 +21,10 @@
   silently dropped. Export avoids Windows-reserved file names (`con`, `aux`, `nul`, `com1`...).
 - Typing: `costs $5 or $10` no longer turns `5 or` into math (no space just inside the dollars, `\$` is a
   dollar sign), and `$..$` or `[[` typed inside inline code stay code.
+- Markdown found by a new random-editing test (`crates/doc/tests/fuzz_edit.rs`): Markdown starting with a `---`
+  rule lost everything up to the next rule (taken for front matter), an empty heading came back as `###`, a
+  link with a space at the end of its text glued words together, and italics inside a word (`wo*rd*s`) were
+  not read. Typst: indented text such as ` - x` was exported as a bullet.
 
 ## 1.1.1 (2026-11-10): better handwriting-to-text
 

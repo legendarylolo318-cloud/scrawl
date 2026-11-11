@@ -80,7 +80,12 @@ fn inline_md(runs: &[Run], link_name: &dyn Fn(&str) -> String) -> String {
                 match link {
                     Some(Link::Page(t)) => {
                         let target = link_name(t);
-                        b = if &target == text { format!("[[{target}]]") } else { format!("[[{target}|{text}]]") };
+                        // spaces at the ends of the link text go outside the brackets (they are trimmed when read)
+                        let core = text.trim();
+                        let (lead, trail) = (&text[..text.len() - text.trim_start().len()], &text[text.trim_end().len()..]);
+                        if !core.is_empty() {
+                            b = if target == core { format!("{lead}[[{target}]]{trail}") } else { format!("{lead}[[{target}|{core}]]{trail}") };
+                        }
                     }
                     Some(Link::Url(u)) => b = format!("[{b}]({u})"),
                     None => {}
@@ -115,7 +120,7 @@ impl Doc {
                     // keep text that merely looks like a list or heading literal
                     let t = b.trim_start();
                     let digits = |n: &str| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit());
-                    if t.starts_with(['#', '-', '+', '>']) || t.split_once(". ").is_some_and(|(n, _)| digits(n)) || t.strip_suffix('.').is_some_and(digits) {
+                    if t.starts_with(['#', '-', '+', '>']) || t.split_once(". ").is_some_and(|(n, _)| digits(n)) || t.trim_end().strip_suffix('.').is_some_and(digits) {
                         format!("\\{b}")
                     } else {
                         b
@@ -178,6 +183,18 @@ pub fn front_matter(src: &str) -> (MdMeta, &str) {
     let Some(rest) = src.strip_prefix("---\n").or_else(|| src.strip_prefix("---\r\n")) else { return (meta, src) };
     let Some(end) = rest.find("\n---") else { return (meta, src) };
     let yaml = &rest[..end];
+    // a page that merely starts with a --- rule is not front matter: every line must look like YAML
+    // (`- item` lines only count right after a `key:` line without a value)
+    let mut list_ok = false;
+    for l in yaml.lines() {
+        let t = l.trim();
+        let key = t.split_once(':').filter(|(k, _)| !k.is_empty() && !k.starts_with('-') && k.chars().all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | ' ' | '.')));
+        if let Some((_, v)) = key {
+            list_ok = v.trim().is_empty();
+        } else if !(t.is_empty() || t.starts_with('#') || (list_ok && t.starts_with("- "))) {
+            return (meta, src);
+        }
+    }
     let after = &rest[end + 4..];
     let body = after.strip_prefix("\r\n").or_else(|| after.strip_prefix('\n')).unwrap_or(after);
     let mut in_tags = false;
@@ -346,7 +363,8 @@ fn inline_runs(text: &str) -> Vec<Run> {
             flush(&mut buf, &mut runs, st);
             st.bold = !st.bold;
             sc.i += 2;
-        } else if (ch == '*' || ch == '_') && (sc.i == 0 || !c[sc.i - 1].is_alphanumeric() || !c.get(sc.i + 1).is_some_and(|n| n.is_alphanumeric())) {
+        } else if (ch == '*' || ch == '_') && (sc.i == 0 || !c[sc.i - 1].is_alphanumeric() || !c.get(sc.i + 1).is_some_and(|n| n.is_alphanumeric()) || (ch == '*' && (st.italic || sc.find(sc.i + 1, "*").is_some()))) {
+            // `*` may start or end emphasis inside a word (`wo*rd*s`), `_` may not (`snake_case`)
             flush(&mut buf, &mut runs, st);
             st.italic = !st.italic;
             sc.i += 1;
@@ -441,7 +459,7 @@ impl Doc {
                 d.push(ParaKind::MathDisplay { expr: Expr::Row(vec![]), source: Some(typst) }, vec![]);
                 i = next;
                 continue;
-            } else if let Some(h) = t.strip_prefix('#').map(|r| (1 + r.chars().take_while(|c| *c == '#').count(), r.trim_start_matches('#'))).filter(|(n, r)| *n <= 6 && r.starts_with(' ')) {
+            } else if let Some(h) = t.strip_prefix('#').map(|r| (1 + r.chars().take_while(|c| *c == '#').count(), r.trim_start_matches('#'))).filter(|(n, r)| *n <= 6 && (r.is_empty() || r.starts_with(' '))) {
                 flush(&mut d, &mut para);
                 d.push(ParaKind::Heading(h.0.min(3) as u8), inline_runs(h.1.trim()));
             } else if is_rule(t) && !t.starts_with("- ") && !t.starts_with("* ") {
@@ -620,13 +638,13 @@ mod round_trip_tests {
     #[test]
     fn body_text_survives_markdown_round_trips() {
         // "==" was dropped (taken for a highlight mark) and "2024." became an empty numbered item
-        for t in ["a == b", "==", "x === y", "2024.", "1.", "12.5", "x ~~ y", "a_ b", "C# and #1", "x | y", "50% * 3", "[x](y)", "a]] b", "  - x", "\\", "a\\b"] {
+        for t in ["a == b", "==", "x === y", "2024.", "1.", "1.\t", "7. ", "12.5", "x ~~ y", "a_ b", "C# and #1", "x | y", "50% * 3", "[x](y)", "a]] b", "  - x", "\\", "a\\b"] {
             let mut d = Doc::new();
             d.push(ParaKind::Body, vec![Run::plain(t)]);
             let back = round(&d);
             assert_eq!(back.paras.len(), 1, "{t:?}");
             assert_eq!(back.paras[0].kind, ParaKind::Body, "{t:?}");
-            assert_eq!(back.paras[0].plain(), t);
+            assert_eq!(back.paras[0].plain().trim_end(), t.trim_end());
         }
     }
 
@@ -662,5 +680,67 @@ mod round_trip_tests {
             assert!(!d.paras.is_empty());
             assert!(t.elapsed().as_millis() < 1500, "{:?} for {}", t.elapsed(), &line[..8]);
         }
+    }
+}
+
+#[cfg(test)]
+mod empty_heading_tests {
+    use super::*;
+
+    #[test]
+    fn an_empty_heading_is_not_read_back_as_hashes() {
+        let mut d = Doc::new();
+        d.push(ParaKind::Heading(3), vec![]);
+        d.push(ParaKind::Body, vec![Run::plain("after")]);
+        let back = Doc::from_markdown(&d.to_markdown(&|s| s.to_string(), &|s| s.to_string()));
+        assert_eq!(back.paras[0].kind, ParaKind::Heading(3));
+        assert_eq!(back.paras[0].plain(), "");
+        assert!(matches!(Doc::from_markdown("#hashtag").paras[0].kind, ParaKind::Body));
+    }
+}
+
+#[cfg(test)]
+mod link_space_tests {
+    use super::*;
+
+    #[test]
+    fn spaces_at_the_ends_of_link_text_are_kept() {
+        let mut d = Doc::new();
+        d.push(ParaKind::Body, vec![Run::plain("x"), Run::Text { text: " pag ".into(), style: Style::default(), link: Some(Link::Page("Linked page".into())) }, Run::plain("rt")]);
+        let back = Doc::from_markdown(&d.to_markdown(&|s| s.to_string(), &|s| s.to_string()));
+        assert_eq!(back.paras[0].plain(), "x pag rt");
+    }
+}
+
+#[cfg(test)]
+mod intraword_tests {
+    use super::*;
+
+    #[test]
+    fn emphasis_inside_a_word_round_trips_and_lone_stars_stay() {
+        let mut d = Doc::new();
+        d.push(ParaKind::Body, vec![Run::plain("wo"), Run::styled("rd", Style { italic: true, ..Style::default() }), Run::plain("s")]);
+        let back = Doc::from_markdown(&d.to_markdown(&|s| s.to_string(), &|s| s.to_string()));
+        assert_eq!(back.paras[0].runs, d.paras[0].runs);
+        assert_eq!(Doc::from_markdown("5*3 = 15").paras[0].plain(), "5*3 = 15");
+        assert_eq!(Doc::from_markdown("snake_case_name").paras[0].plain(), "snake_case_name");
+    }
+}
+
+#[cfg(test)]
+mod rule_first_tests {
+    use super::*;
+
+    #[test]
+    fn a_note_starting_with_a_rule_keeps_its_text() {
+        // the text between two rules was taken for front matter and dropped
+        let md = "---\n\nImportant text\n\n---\n\nmore";
+        let d = Doc::from_markdown(md);
+        assert!(d.plain_text().contains("Important text"), "{:?}", d.plain_text());
+        assert_eq!(d.paras.iter().filter(|p| p.kind == ParaKind::Rule).count(), 2);
+        // real front matter still works, with lists and comments
+        let (m, body) = front_matter("---\ntitle: T\ntags:\n  - a\n# comment\naliases: [x]\n---\nbody");
+        assert_eq!(m.title.as_deref(), Some("T"));
+        assert_eq!(body, "body");
     }
 }

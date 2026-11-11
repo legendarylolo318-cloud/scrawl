@@ -57,6 +57,11 @@ fn runs_markup(runs: &[Run]) -> String {
 
 /// Escape characters at the start of a plain paragraph that Typst would turn into list or heading markers.
 fn guard_line_start(s: String) -> String {
+    // Typst ignores leading spaces before a list or heading marker, so guard after them
+    let lead = s.len() - s.trim_start().len();
+    if lead > 0 {
+        return format!("{}{}", &s[..lead], guard_line_start(s[lead..].to_string()));
+    }
     let mut chars = s.chars();
     match chars.next() {
         Some(c @ ('=' | '-' | '+')) => format!("\\{c}{}", chars.as_str()),
@@ -82,7 +87,7 @@ pub fn para_markup(p: &Para) -> Option<String> {
         ParaKind::Numbered { indent } => format!("{}+ {}", "  ".repeat(*indent as usize), body()),
         ParaKind::Check { done } => format!("- {} {}", if *done { "☑" } else { "☐" }, body()),
         ParaKind::Quote => format!("#quote(block: true)[{}]", body()),
-        ParaKind::Callout(_) => body(),
+        ParaKind::Callout(_) => guard_line_start(body()),
         ParaKind::Markup(src) => src.clone(),
         _ => return None,
     })
@@ -164,7 +169,8 @@ impl P<'_> {
                     self.i = j + 2;
                 }
                 '`' => {
-                    let j = self.find_close(self.i + 1, '`').ok_or(())?;
+                    // raw text has no escapes: `a\` ends at the second backtick
+                    let j = (self.i + 1..self.c.len()).find(|&j| self.c[j] == '`').ok_or(())?;
                     flush!();
                     let t: String = self.c[self.i + 1..j].iter().collect();
                     runs.push(Run::Text { text: t, style: Style { code: true, ..style }, link: link.clone() });
@@ -473,5 +479,21 @@ mod tests {
     fn serde_defaults_load_minimal_json() {
         let d: Doc = serde_json::from_str(r#"{"paras":[{"id":1,"kind":"Body","runs":[{"Text":{"text":"hi"}}]}]}"#).unwrap();
         assert_eq!(d.paras[0].plain(), "hi");
+    }
+}
+
+#[cfg(test)]
+mod guard_tests {
+    use super::*;
+
+    #[test]
+    fn indented_text_that_looks_like_a_list_stays_text() {
+        for t in [" - x", "  + y", " = z", "\t1. w"] {
+            let mut d = Doc::new();
+            d.push(ParaKind::Body, vec![Run::plain(t)]);
+            let back = Doc::from_markup(&d.to_typst());
+            assert_eq!(back.paras[0].kind, ParaKind::Body, "{t:?} -> {:?}", d.to_typst());
+            assert_eq!(back.paras[0].plain().trim(), t.trim());
+        }
     }
 }
