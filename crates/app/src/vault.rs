@@ -21,9 +21,15 @@ const MAX_DEPTH: usize = 8;
 pub fn safe_name(s: &str) -> String {
     let t: String = s.chars().map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '#' | '^' | '[' | ']') || c.is_control() { '-' } else { c }).collect();
     let t = t.trim().trim_matches('.').trim().to_string();
-    let t: String = t.chars().take(100).collect();
+    let t: String = t.chars().take(100).collect::<String>().trim_end_matches(['.', ' ']).to_string();
     if t.is_empty() {
-        "Untitled".into()
+        return "Untitled".into();
+    }
+    // Windows refuses CON, PRN, AUX, NUL, COM1-9 and LPT1-9 as file names, with or without an extension
+    let stem = t.split('.').next().unwrap_or("").trim().to_uppercase();
+    let reserved = ["CON", "PRN", "AUX", "NUL"].contains(&stem.as_str()) || (stem.len() == 4 && (stem.starts_with("COM") || stem.starts_with("LPT")) && stem.as_bytes()[3].is_ascii_digit());
+    if reserved {
+        format!("_{t}")
     } else {
         t
     }
@@ -110,11 +116,10 @@ pub fn export(ws: &mut Workspace, dest: &Path) -> Result<(Report, PathBuf), Stri
     Ok((report, root))
 }
 
-fn walk(dir: &Path, depth: usize, md: &mut Vec<PathBuf>, images: &mut HashMap<String, PathBuf>) {
-    if depth > MAX_DEPTH || md.len() >= MAX_FILES {
-        return;
-    }
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
+/// Collect `.md` files and images. Returns how many notes were left out (too many or too deep).
+fn walk(dir: &Path, depth: usize, md: &mut Vec<PathBuf>, images: &mut HashMap<String, PathBuf>) -> usize {
+    let mut left_out = 0;
+    let Ok(rd) = std::fs::read_dir(dir) else { return 0 };
     let mut entries: Vec<_> = rd.flatten().collect();
     entries.sort_by_key(|e| e.file_name());
     for e in entries {
@@ -125,28 +130,63 @@ fn walk(dir: &Path, depth: usize, md: &mut Vec<PathBuf>, images: &mut HashMap<St
         }
         let p = e.path();
         if ft.is_dir() {
-            walk(&p, depth + 1, md, images);
+            if depth < MAX_DEPTH {
+                left_out += walk(&p, depth + 1, md, images);
+            } else {
+                left_out += count_md(&p, 0);
+            }
         } else if ft.is_file() {
             let lower = name.to_lowercase();
             if lower.ends_with(".md") {
-                md.push(p);
+                if md.len() < MAX_FILES {
+                    md.push(p);
+                } else {
+                    left_out += 1;
+                }
             } else if [".png", ".jpg", ".jpeg", ".gif", ".webp"].iter().any(|x| lower.ends_with(x)) {
                 images.entry(lower).or_insert(p);
             }
         }
     }
+    left_out
+}
+
+/// Notes in a folder that is too deep to import (counted so the user is told; bounded work).
+fn count_md(dir: &Path, depth: usize) -> usize {
+    let Ok(rd) = std::fs::read_dir(dir) else { return 0 };
+    let mut n = 0;
+    for e in rd.flatten().take(10_000) {
+        let Ok(ft) = e.file_type() else { continue };
+        if ft.is_dir() && !ft.is_symlink() && depth < 8 {
+            n += count_md(&e.path(), depth + 1);
+        } else if ft.is_file() && e.file_name().to_string_lossy().to_lowercase().ends_with(".md") {
+            n += 1;
+        }
+    }
+    n
+}
+
+/// How a wiki link target is matched to a file: `Folder/Note.md` and `note` both mean the file `Note.md`.
+fn link_key(target: &str) -> String {
+    let t = target.trim();
+    let t = t.rsplit('/').next().unwrap_or(t);
+    let cut = t.len().saturating_sub(3);
+    let t = if t.get(cut..).is_some_and(|e| e.eq_ignore_ascii_case(".md")) { &t[..cut] } else { t };
+    t.trim().to_lowercase()
 }
 
 /// Import the Markdown files below `src` as a new notebook and open it.
 pub fn import(ws: &mut Workspace, src: &Path, now: u64) -> Result<Report, String> {
     let src = src.canonicalize().map_err(|e| e.to_string())?;
     let (mut files, mut images) = (Vec::new(), HashMap::new());
-    walk(&src, 0, &mut files, &mut images);
+    let left_out = walk(&src, 0, &mut files, &mut images);
     if files.is_empty() {
         return Err("No Markdown (.md) files found in that folder".into());
     }
     let name = src.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "vault".into());
     ws.create_notebook(&format!("{name} (imported)"), None, now)?;
+    // create_notebook opens a starter page; it is removed once the notes are in
+    let placeholder = ws.page.id.clone();
     // the empty "Notes" section made by create_notebook is reused for files in the top folder
     let mut section_ids: HashMap<String, String> = HashMap::new();
     if let Some(s) = ws.nb.sections.first() {
@@ -157,13 +197,17 @@ pub fn import(ws: &mut Workspace, src: &Path, now: u64) -> Result<Report, String
     for f in &files {
         if std::fs::metadata(f).is_ok_and(|m| m.len() <= MAX_MD_BYTES) {
             if let Ok(t) = std::fs::read_to_string(f) {
-                if let (Some(title), Some(stem)) = (notedoc::front_matter(&t).0.title, f.file_stem()) {
-                    title_of_stem.insert(stem.to_string_lossy().to_lowercase(), title);
+                if let Some(stem) = f.file_stem() {
+                    let stem = stem.to_string_lossy().to_string();
+                    title_of_stem.insert(stem.to_lowercase(), notedoc::front_matter(&t).0.title.unwrap_or(stem));
                 }
             }
         }
     }
     let mut report = Report::default();
+    if left_out > 0 {
+        report.skipped.push(format!("{left_out} note(s) were not imported (more than {MAX_FILES} notes or folders deeper than {MAX_DEPTH})"));
+    }
     let mut first_page: Option<String> = None;
     let mut used: HashMap<String, usize> = HashMap::new();
     let mut media_done: HashMap<String, Option<(String, u32, u32)>> = HashMap::new();
@@ -185,7 +229,7 @@ pub fn import(ws: &mut Workspace, src: &Path, now: u64) -> Result<Report, String
         for p in doc.paras.iter_mut() {
             for r in p.runs.iter_mut() {
                 if let notedoc::Run::Text { link: Some(Link::Page(t)), .. } = r {
-                    if let Some(real) = title_of_stem.get(&t.trim().to_lowercase()) {
+                    if let Some(real) = title_of_stem.get(&link_key(t)) {
                         *t = real.clone();
                     }
                 }
@@ -251,9 +295,13 @@ pub fn import(ws: &mut Workspace, src: &Path, now: u64) -> Result<Report, String
         report.pages += 1;
     }
     ws.store.save_notebook(&ws.nb, &ws.vault).map_err(|e| e.to_string())?;
-    // an empty default section would only confuse
     if let Some(first) = first_page {
         ws.open_page(&first, now).map_err(|e| e.to_string())?;
+        if placeholder != first && ws.nb.find_page(&placeholder).is_some() {
+            // deleted with time 0 so the purge removes it for good right away
+            ws.store.delete_page(&mut ws.nb, &placeholder, &ws.vault, 0).map_err(|e| e.to_string())?;
+            ws.store.purge_trash(&ws.nb.id, &ws.vault, now.max(store::now_ms())).map_err(|e| e.to_string())?;
+        }
     }
     Ok(report)
 }
@@ -379,5 +427,80 @@ mod tests {
         assert!(import(&mut ws, &tmp("empty"), 6).is_err());
         std::fs::remove_dir_all(notes).ok();
         std::fs::remove_dir_all(vault).ok();
+    }
+}
+
+#[cfg(test)]
+mod import_bug_tests {
+    use super::*;
+
+    fn tmp(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("scrawl-vaultbug-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn titles(ws: &Workspace) -> Vec<String> {
+        ws.nb.sections.iter().flat_map(|s| s.pages.iter().map(|p| p.title.clone())).collect()
+    }
+
+    #[test]
+    fn import_adds_only_the_vault_pages() {
+        // the new notebook used to keep a "Lecture notes" template page next to the imported ones
+        let (notes, vault) = (tmp("n1"), tmp("v1"));
+        std::fs::write(vault.join("A.md"), "a").unwrap();
+        std::fs::write(vault.join("B.md"), "b").unwrap();
+        let mut ws = Workspace::open_with(&notes, None, None).unwrap();
+        let r = import(&mut ws, &vault, 5).unwrap();
+        assert_eq!(r.pages, 2);
+        let mut t = titles(&ws);
+        t.sort();
+        assert_eq!(t, vec!["A", "B"]);
+        assert_eq!(ws.page.title, "A");
+        std::fs::remove_dir_all(notes).ok();
+        std::fs::remove_dir_all(vault).ok();
+    }
+
+    #[test]
+    fn obsidian_path_links_and_md_suffixes_resolve_to_titles() {
+        let (notes, vault) = (tmp("n2"), tmp("v2"));
+        std::fs::create_dir_all(vault.join("Uni")).unwrap();
+        std::fs::write(vault.join("Uni").join("Limits.md"), "---\ntitle: Limits of functions\n---\nx").unwrap();
+        std::fs::write(vault.join("Uni").join("Plain.md"), "y").unwrap();
+        std::fs::write(vault.join("Top.md"), "[[Uni/Limits]] [[Limits.md|l]] [[Uni/Plain]] [[Uni/Plain.md#Head]]").unwrap();
+        let mut ws = Workspace::open_with(&notes, None, None).unwrap();
+        import(&mut ws, &vault, 5).unwrap();
+        let top = ws.nb.sections.iter().flat_map(|s| s.pages.iter()).find(|p| p.title == "Top").unwrap().id.clone();
+        let top = ws.load_other(&top).unwrap();
+        let links: Vec<String> = top.doc.unwrap().paras.iter().flat_map(|p| p.runs.clone()).filter_map(|r| if let notedoc::Run::Text { link: Some(Link::Page(t)), .. } = r { Some(t) } else { None }).collect();
+        assert_eq!(links, vec!["Limits of functions", "Limits of functions", "Plain", "Plain"]);
+        assert_eq!(dangling_links(&ws), 0);
+        std::fs::remove_dir_all(notes).ok();
+        std::fs::remove_dir_all(vault).ok();
+    }
+
+    #[test]
+    fn notes_left_out_of_a_huge_vault_are_reported() {
+        let (notes, vault) = (tmp("n3"), tmp("v3"));
+        for i in 0..MAX_FILES + 3 {
+            std::fs::write(vault.join(format!("n{i:05}.md")), "x").unwrap();
+        }
+        let mut ws = Workspace::open_with(&notes, None, None).unwrap();
+        let r = import(&mut ws, &vault, 5).unwrap();
+        assert_eq!(r.pages, MAX_FILES);
+        assert!(r.skipped.iter().any(|s| s.contains("not imported")), "{:?}", r.skipped.first());
+        std::fs::remove_dir_all(notes).ok();
+        std::fs::remove_dir_all(vault).ok();
+    }
+
+    #[test]
+    fn windows_reserved_names_are_not_used_for_files() {
+        for n in ["con", "CON", "aux", "Nul", "com1", "LPT9", "con.txt", "aux.", "prn "] {
+            let s = safe_name(n);
+            let stem = s.split('.').next().unwrap().trim().to_uppercase();
+            assert!(!["CON", "PRN", "AUX", "NUL", "COM1", "LPT9"].contains(&stem.as_str()), "{n} -> {s}");
+        }
+        assert_eq!(safe_name("console"), "console");
     }
 }

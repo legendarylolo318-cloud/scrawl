@@ -16,6 +16,9 @@
 - Markdown: text with `==` lost it, a line such as `2024.` came back as an empty numbered item, Typst display
   math was mangled on re-import, URL links with `(` `)` were cut and kept backslashes in their label, a byte-order
   mark hid the front matter, and a long line (100 000 characters) took 50 s to read. All fixed, with tests.
+- Vault import: the new notebook no longer gets an extra "Lecture notes" page; `[[Folder/Note]]` and
+  `[[Note.md]]` links now find their page; notes left out of very large or deep vaults are reported instead of
+  silently dropped. Export avoids Windows-reserved file names (`con`, `aux`, `nul`, `com1`...).
 
 ## 1.1.1 (2026-11-10): better handwriting-to-text
 
