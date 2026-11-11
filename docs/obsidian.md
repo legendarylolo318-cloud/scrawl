@@ -7,7 +7,7 @@ Scrawl keeps your notes as local files and now speaks Obsidian's language.
 | `[[Wiki links]]` | Type `[[` for a pick-list of your pages (Tab/Enter takes the first, Esc closes it), or type `[[Title]]`. Click a link to open it; a link to a missing page creates it. |
 | Backlinks | A **Linked from** strip under the page lists the pages that link here. |
 | Graph view | **⋯ → Graph of linked notes**: dots are pages, lines are links, grey dots are links to pages that do not exist yet. Click one to open it. |
-| `#tags` | Type `#idea` in a note and it becomes a page tag. **⋯ → Tags** lists tags and their pages; `tag:idea` also works in the sidebar search. |
+| `#tags` | Type `#idea` in a note and it becomes a page tag (deleting it again while the page is open removes the tag; tags the page already had stay). **⋯ → Tags** lists tags and their pages; `tag:idea` also works in the sidebar search. |
 | Quick switcher / command palette | Ctrl+P and Ctrl+K (unchanged). |
 | Daily note | **⋯ → Today's note**. |
 | Templates / snippets | Plugins with `snippets` (see `docs/plugins.md`). |

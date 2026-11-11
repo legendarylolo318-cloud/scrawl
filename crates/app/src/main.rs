@@ -1631,6 +1631,35 @@ fn run_scene(ui: &MainWindow, st: &Rc<RefCell<State>>, scene: &str) {
                     ui.invoke_doc_key(c.to_string().into(), false, false, false, false);
                 }
             }
+            "tagtyping" => {
+                // typing "#calculus " must add one tag, not "c", "ca", "cal", ...
+                ui.invoke_run_command("quick-note".into());
+                {
+                    let s = &mut *st.borrow_mut();
+                    s.new_editor = true;
+                    s.tool = Tool::TextBox;
+                    if let Some(ws) = &mut s.ws {
+                        ws.page.doc = Some(notedoc::Doc::from_markup("Topic: "));
+                        ws.page.tags = vec!["kept".into()];
+                    }
+                    s.dirty |= dirty::CANVAS | dirty::TOOLS;
+                    flush(ui, s);
+                }
+                ui.invoke_pointer_down(300.0, 60.0);
+                ui.invoke_pointer_up();
+                ui.invoke_doc_key("\u{F72B}".into(), false, false, false, false);
+                for c in "#calculus and #x1 ".chars() {
+                    ui.invoke_doc_key(c.to_string().into(), false, false, false, false);
+                }
+                let tags = st.borrow().ws.as_ref().unwrap().page.tags.clone();
+                assert_eq!(tags, vec!["kept", "calculus", "x1"], "only finished tags are added");
+                // deleting the tag text again removes a tag that was only added while typing here
+                for _ in 0.."and #x1 ".len() + "calculus ".len() + 1 {
+                    ui.invoke_doc_key("\u{8}".into(), false, false, false, false);
+                }
+                let s = st.borrow();
+                assert_eq!(s.ws.as_ref().unwrap().page.tags, vec!["kept"], "{:?}", s.ws.as_ref().unwrap().page.doc.as_ref().map(|d| d.plain_text()));
+            }
             "plugins" => {
                 {
                     let s = &mut *st.borrow_mut();
@@ -1680,6 +1709,14 @@ fn run_scene(ui: &MainWindow, st: &Rc<RefCell<State>>, scene: &str) {
                     assert_eq!(g.nodes.len(), 11, "welcome page + 8 pages + 2 unresolved links");
                     assert!(g.nodes.iter().any(|n| n.title == "Taylor" && !n.exists));
                     assert_eq!(g.edges.len(), 9, "each pair of linked notes is one line");
+                }
+                if std::env::var_os("SCRAWL_SHOT_CLICK").is_some() {
+                    // click a ghost node the way the Slint TouchArea does: it must open a new page, without a re-borrow panic
+                    let (fx, fy) = st.borrow().note_graph.as_ref().and_then(|g| g.nodes.iter().find(|n| n.title == "Taylor").map(|n| (n.x, n.y))).unwrap();
+                    ui.invoke_note_graph_click(fx, fy);
+                    let s = st.borrow();
+                    assert_eq!(s.ws.as_ref().unwrap().page.title, "Taylor", "clicking a grey dot creates and opens that page");
+                    assert!(s.overlay.is_empty());
                 }
             }
             "menu" => ui.invoke_open_menu("insert".into()),

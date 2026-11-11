@@ -140,6 +140,8 @@ pub struct EditState {
     pub ink_seen: u64,
     /// The `[[` suggestions were dismissed with Esc for this (paragraph, offset of the `[[`).
     pub link_dismissed: Option<(usize, usize)>,
+    /// Tags added to the page from `#tags` typed since the page was opened.
+    pub auto_tags: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -150,7 +152,7 @@ pub enum Layer {
 
 impl Default for EditState {
     fn default() -> Self {
-        Self { sel: Sel::default(), undo: vec![], redo: vec![], pending: None, last_kind: "", goal_x: None, dragging: false, click: None, caret_on: true, press_was_click: false, order: vec![], redo_order: vec![], ink_seen: 0, link_dismissed: None }
+        Self { sel: Sel::default(), undo: vec![], redo: vec![], pending: None, last_kind: "", goal_x: None, dragging: false, click: None, caret_on: true, press_was_click: false, order: vec![], redo_order: vec![], ink_seen: 0, link_dismissed: None, auto_tags: vec![] }
     }
 }
 
@@ -190,13 +192,9 @@ fn snapshot(s: &mut State, kind: &'static str) {
 fn after_edit(s: &mut State) {
     if let Some(ws) = &mut s.ws {
         ws.touch();
-        // #tags typed in the text become page tags (never removed automatically)
+        // #tags typed in the text become page tags
         if let Some(d) = ws.page.doc.as_ref() {
-            for t in d.hashtags() {
-                if !ws.page.tags.contains(&t) {
-                    ws.page.tags.push(t);
-                }
-            }
+            merge_text_tags(&mut ws.page.tags, &mut s.dedit.ed.auto_tags, &d.hashtags());
         }
         // keep the block copy current so export, print, search and history previews see the latest text
         ws.page.sync_blocks();
@@ -1213,5 +1211,41 @@ mod md_paste_tests {
         assert!(!looks_like_markdown("just a sentence"));
         assert!(!looks_like_markdown("two lines\nof plain text"));
         assert!(!looks_like_markdown("5 * 3 = 15"));
+    }
+}
+
+/// Add the `#tags` found in the text to `tags`. A tag that was added this way while the page was open
+/// (`auto`) and is no longer in the text is taken out again: typing `#calculus` passes through `#c`,
+/// `#ca`, ... and only `calculus` should stay. Tags the page had before are never removed.
+pub fn merge_text_tags(tags: &mut Vec<String>, auto: &mut Vec<String>, in_text: &[String]) {
+    auto.retain(|t| {
+        let keep = in_text.contains(t);
+        if !keep {
+            tags.retain(|x| x != t);
+        }
+        keep
+    });
+    for t in in_text {
+        if !tags.contains(t) {
+            tags.push(t.clone());
+            auto.push(t.clone());
+        }
+    }
+}
+
+#[cfg(test)]
+mod tag_tests {
+    use super::merge_text_tags;
+
+    #[test]
+    fn half_typed_tags_do_not_stay() {
+        let (mut tags, mut auto) = (vec!["old".to_string(), "c".to_string()], vec![]);
+        for typed in ["c", "ca", "cal", "calc"] {
+            merge_text_tags(&mut tags, &mut auto, &[typed.to_string()]);
+        }
+        // "c" was a tag before the page was opened, so it stays; the half-typed ones go
+        assert_eq!(tags, vec!["old", "c", "calc"]);
+        merge_text_tags(&mut tags, &mut auto, &[]);
+        assert_eq!(tags, vec!["old", "c"]);
     }
 }

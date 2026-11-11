@@ -25,6 +25,7 @@
   rule lost everything up to the next rule (taken for front matter), an empty heading came back as `###`, a
   link with a space at the end of its text glued words together, and italics inside a word (`wo*rd*s`) were
   not read. Typst: indented text such as ` - x` was exported as a bullet.
+- Tags: typing `#calculus` added every prefix as a tag (`c`, `ca`, `cal`, ...). Only the finished tag stays now.
 
 ## 1.1.1 (2026-11-10): better handwriting-to-text
 
