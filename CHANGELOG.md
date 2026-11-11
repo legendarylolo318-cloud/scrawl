@@ -13,6 +13,7 @@
 ### Fixed (bug check)
 - Plugins: a module declaring a huge table (4 billion entries) made Scrawl allocate about 16 GB and freeze;
   tables are now capped at 100 000 entries per table.
+- Plugins screen: each row now starts with on/off and what a click does (it was cut off in narrow windows).
 - Plugins: `"wasm": "sub/p.wasm"` through a symbolic link to a folder could load a module from outside the plugin
   folder; `wasm` must now be a plain file name, as documented.
 - Markdown: text with `==` lost it, a line such as `2024.` came back as an empty numbered item, Typst display

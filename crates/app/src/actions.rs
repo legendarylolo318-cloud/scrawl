@@ -1115,7 +1115,8 @@ pub fn overlay_query(ui: &MainWindow, s: &mut State, q: &str) {
                 .iter()
                 .map(|p| {
                     let off = s.settings.disabled_plugins.contains(&p.manifest.name);
-                    item(p.manifest.name.clone(), format!("{} {}{}", p.manifest.name, p.manifest.version, if off { "  (off)" } else { "" }), format!("{}  ·  {} command(s), {} snippet(s)  ·  click to turn {}", p.manifest.description, p.manifest.commands.len(), p.manifest.snippets.len(), if off { "on" } else { "off" }))
+                    // on/off and what a click does come first: the row is cut off in narrow windows
+                    item(p.manifest.name.clone(), format!("{} {}  ({})", p.manifest.name, p.manifest.version, if off { "off" } else { "on" }), format!("Click to turn {}  ·  {} command(s), {} snippet(s)  ·  {}", if off { "on" } else { "off" }, p.manifest.commands.len(), p.manifest.snippets.len(), p.manifest.description))
                 })
                 .collect();
             rows.extend(s.plugin_errors.iter().map(|e| item("", "Could not load", e.clone())));
