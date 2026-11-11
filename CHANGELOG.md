@@ -19,6 +19,8 @@
 - Vault import: the new notebook no longer gets an extra "Lecture notes" page; `[[Folder/Note]]` and
   `[[Note.md]]` links now find their page; notes left out of very large or deep vaults are reported instead of
   silently dropped. Export avoids Windows-reserved file names (`con`, `aux`, `nul`, `com1`...).
+- Typing: `costs $5 or $10` no longer turns `5 or` into math (no space just inside the dollars, `\$` is a
+  dollar sign), and `$..$` or `[[` typed inside inline code stay code.
 
 ## 1.1.1 (2026-11-10): better handwriting-to-text
 

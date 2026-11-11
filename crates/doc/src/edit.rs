@@ -590,6 +590,11 @@ pub fn autoformat_dollar(doc: &mut Doc, pos: Pos) -> Option<Pos> {
     if inner.trim().is_empty() || inner.contains('\u{FFFC}') {
         return None;
     }
+    // like Markdown: no space just inside the dollars (so "$5 or $10" stays text), `\$` is a dollar
+    // sign, and nothing in inline code becomes math
+    if inner.starts_with(char::is_whitespace) || inner.ends_with(char::is_whitespace) || inner.ends_with('\\') || style_at(doc, Pos { para: pos.para, off: open + 1 }).code {
+        return None;
+    }
     let p = &mut doc.paras[pos.para];
     let mut runs = slice_runs(&p.runs, 0, open);
     runs.push(Run::Math { typst: inner.trim().to_string() });
@@ -884,6 +889,10 @@ pub fn link_query(doc: &Doc, pos: Pos) -> Option<(usize, String)> {
     let c = chars_of(p);
     let end = pos.off.min(c.len());
     let k = (0..end.saturating_sub(1)).rev().find(|&k| c[k] == '[' && c[k + 1] == '[')?;
+    // `[[` inside inline code is just code
+    if style_at(doc, Pos { para: pos.para, off: k + 1 }).code {
+        return None;
+    }
     let q: String = c[k + 2..end].iter().collect();
     (!q.contains([']', '\u{FFFC}', '\n']) && q.chars().count() <= 80).then_some((k, q))
 }
@@ -943,5 +952,62 @@ mod link_tests {
         assert!(link_query(&e, at).is_none());
         assert!(link_query(&Doc::from_markup("a [b"), Pos { para: 0, off: 4 }).is_none());
         assert!(autoformat_link(&mut Doc::from_markup("[[]]"), Pos { para: 0, off: 4 }).is_none());
+    }
+}
+
+#[cfg(test)]
+mod link_in_code_tests {
+    use super::*;
+
+    #[test]
+    fn brackets_typed_in_inline_code_stay_code() {
+        let code = Style { code: true, ..Style::default() };
+        let mut d = Doc::from_markup("x ");
+        let at = insert_text(&mut d, Sel::caret(Pos { para: 0, off: 2 }), "[[Page]]", code);
+        assert!(autoformat_link(&mut d, at).is_none(), "{:?}", d.paras[0].runs);
+        assert_eq!(d.paras[0].plain(), "x [[Page]]");
+        let mut e = Doc::from_markup("x ");
+        let at = insert_text(&mut e, Sel::caret(Pos { para: 0, off: 2 }), "[[Pa", code);
+        assert!(link_query(&e, at).is_none(), "no page suggestions inside code");
+    }
+}
+
+#[cfg(test)]
+mod dollar_tests {
+    use super::*;
+
+    /// Type `s` one character at a time like the app does (autoformat after `$`).
+    fn type_all(s: &str, style: Style) -> Doc {
+        let mut d = Doc::from_markup("");
+        ensure_not_empty(&mut d);
+        let mut pos = Pos::default();
+        for ch in s.chars() {
+            pos = insert_text(&mut d, Sel::caret(pos), &ch.to_string(), style);
+            if ch == '$' {
+                if let Some(p) = autoformat_dollar(&mut d, pos) {
+                    pos = p;
+                }
+            }
+        }
+        d
+    }
+
+    fn has_math(d: &Doc) -> bool {
+        d.paras.iter().flat_map(|p| &p.runs).any(|r| matches!(r, Run::Math { .. }))
+    }
+
+    #[test]
+    fn prices_and_code_do_not_become_math() {
+        // typing the second "$" turned "5 or " into inline math
+        let d = type_all("costs $5 or $10", Style::default());
+        assert!(!has_math(&d), "{:?}", d.paras[0].runs);
+        assert_eq!(d.paras[0].plain(), "costs $5 or $10");
+        assert!(!has_math(&type_all("a $ b $", Style::default())));
+        assert!(!has_math(&type_all("echo $HOME$", Style { code: true, ..Style::default() })), "no math inside code");
+        assert!(!has_math(&type_all("$a\\$", Style::default())), "\\$ is an escaped dollar");
+        // real math still converts
+        let m = type_all("so $x^2$ ok", Style::default());
+        assert!(has_math(&m));
+        assert_eq!(m.paras[0].plain().replace('\u{FFFC}', "M"), m.paras[0].plain().replace('\u{FFFC}', "M"));
     }
 }
