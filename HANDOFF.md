@@ -10,6 +10,27 @@ Markdown, tag list is not shown in the sidebar, graph has no zoom/drag, plugin s
 (the `wasm32` build was not run here), vault import does not merge into an existing notebook (always a new one),
 backlinks only see pages saved to disk.
 
+## Bug check of the Obsidian/plugin work (2026-11-11)
+
+Fixed with tests (see CHANGELOG "Fixed (bug check)"): plugin table-size memory bomb, plugin module via a
+symlinked folder, status-only plugins leaving an empty undo step, Markdown losses (`==`, `2024.`, Typst display
+math, URL links, BOM, rule-first notes taken for front matter, empty headings, link-text spaces, intra-word
+italics), quadratic Markdown parsing (100 000-char line: 50 s), vault import (extra template page, path links,
+silently dropped notes, Windows-reserved names), `$5 or $10` turning into math, `[[`/`$` inside inline code,
+`#tag` prefixes piling up as tags, backlinks missed after the top 30 search hits.
+
+New checks: `crates/doc/tests/fuzz_edit.rs` (seeded random editing; once run clean with 8000 seeds), headless
+scenes `tagtyping` and `pluginedge`, `SCRAWL_SHOT_CLICK=1` for a ghost-node click in `notegraph`, and the
+ignored `vault_round_trip_real_notes` (`SCRAWL_VAULT_CHECK=<copy of notes>`). Scenes are not run by
+`cargo test`; run them by hand with `SCRAWL_NOTES_DIR` set to a temp folder.
+
+Still open (found, not fixed): Typst page links are `[[target]]` only, so a link whose text was edited shows the
+target in exports/blocks; inline math goes to Markdown as Typst source, not LaTeX; leading/trailing spaces of a
+line are trimmed by a Markdown round trip; graph labels can overlap; if `vault::import` fails half-way the
+workspace is already in the new notebook but `vault_run` does not refresh tabs/doc (not reproduced, needs a
+failing disk). Measured: plugin at 50 M fuel stops in ~35 ms (release); 600-node graph layout ~85 ms;
+5000-paragraph snippet insert ~75 ms, undo ~7 ms.
+
 ## UI redesign status (read this first)
 
 See `docs/ui-redesign.md` (plan) and `CHANGELOG.md`. Built: `crates/doc` (package `notedoc`: model, Typst conversion,
