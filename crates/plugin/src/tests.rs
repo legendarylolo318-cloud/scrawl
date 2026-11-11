@@ -145,3 +145,61 @@ fn the_shipped_text_tools_manifest_is_valid() {
     let m = Manifest::parse(&m).unwrap();
     assert_eq!(m.commands.len(), 5);
 }
+
+fn run_wat(name: &str, wat: &str) -> (Result<Vec<Action>, String>, std::time::Duration) {
+    let d = tmp(name);
+    write_plugin(&d, r#"{"name":"evil","wasm":"plugin.wat","commands":[{"id":"go","title":"Go"}]}"#, Some(wat));
+    let t = std::time::Instant::now();
+    let r = Plugin::load(&d).and_then(|p| p.run("go", Request::default()));
+    let el = t.elapsed();
+    std::fs::remove_dir_all(d).ok();
+    (r, el)
+}
+
+#[test]
+fn a_plugin_with_a_huge_table_is_refused_quickly_without_eating_memory() {
+    // Before the fix this allocated ~16 GB and blocked for seconds (no table size limit).
+    let (r, el) = run_wat("bigtable", r#"(module (memory (export "memory") 1) (table 4294967295 funcref)
+      (func (export "alloc") (param i32) (result i32) (i32.const 0))
+      (func (export "scrawl_run") (param i32 i32) (result i64) (i64.const 0)))"#);
+    assert!(r.is_err());
+    assert!(el.as_millis() < 500, "took {el:?}");
+    let (r, _) = run_wat("growtable", r#"(module (memory (export "memory") 1) (table 1 funcref)
+      (func (export "alloc") (param i32) (result i32) (i32.const 0))
+      (func (export "scrawl_run") (param i32 i32) (result i64)
+        (if (i32.ne (table.grow (ref.null func) (i32.const 100000000)) (i32.const -1)) (then unreachable)) (i64.const 0)))"#);
+    assert!(r.unwrap_err().contains("not valid"), "table.grow must fail, not trap");
+}
+
+#[test]
+fn hostile_modules_fail_cleanly_and_fast() {
+    for (n, w, why) in [
+        ("startloop", r#"(module (memory (export "memory") 1) (func $s (loop $l (br $l))) (start $s)
+          (func (export "alloc") (param i32) (result i32) (i32.const 0))
+          (func (export "scrawl_run") (param i32 i32) (result i64) (i64.const 0)))"#, "too long"),
+        ("badalloc", r#"(module (memory (export "memory") 1)
+          (func (export "alloc") (param i32) (result i32) (i32.const 65530))
+          (func (export "scrawl_run") (param i32 i32) (result i64) (i64.const 0)))"#, "invalid buffer"),
+        ("negalloc", r#"(module (memory (export "memory") 1)
+          (func (export "alloc") (param i32) (result i32) (i32.const -5))
+          (func (export "scrawl_run") (param i32 i32) (result i64) (i64.const 0)))"#, "pointer"),
+        ("neglen", r#"(module (memory (export "memory") 1)
+          (func (export "alloc") (param i32) (result i32) (i32.const 0))
+          (func (export "scrawl_run") (param i32 i32) (result i64) (i64.const -1)))"#, "too large"),
+        ("outside", r#"(module (memory (export "memory") 1)
+          (func (export "alloc") (param i32) (result i32) (i32.const 0))
+          (func (export "scrawl_run") (param i32 i32) (result i64) (i64.const 0x0000FFFF00000010)))"#, "invalid buffer"),
+        ("recurse", r#"(module (memory (export "memory") 1) (func $r (call $r))
+          (func (export "alloc") (param i32) (result i32) (i32.const 0))
+          (func (export "scrawl_run") (param i32 i32) (result i64) (call $r) (i64.const 0)))"#, "failed"),
+        ("bigmem", r#"(module (memory (export "memory") 2000)
+          (func (export "alloc") (param i32) (result i32) (i32.const 0))
+          (func (export "scrawl_run") (param i32 i32) (result i64) (i64.const 0)))"#, ""),
+    ] {
+        let (r, el) = run_wat(n, w);
+        let e = r.expect_err(n);
+        assert!(e.contains(why), "{n}: {e}");
+        // 50 M fuel is ~35 ms in release; allow plenty for debug builds
+        assert!(el.as_secs() < 5, "{n} took {el:?}");
+    }
+}

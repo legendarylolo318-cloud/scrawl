@@ -10,6 +10,10 @@
 - **Plugins:** sandboxed WebAssembly plugins (pure-Rust `wasmi`) and no-code snippet packs, with a Plugins screen.
   See `docs/plugins.md`, `examples/plugins`, and the Plugins section of `SECURITY.md`.
 
+### Fixed (bug check)
+- Plugins: a module declaring a huge table (4 billion entries) made Scrawl allocate about 16 GB and freeze;
+  tables are now capped at 100 000 entries per table.
+
 ## 1.1.1 (2026-11-10): better handwriting-to-text
 
 ### Changed

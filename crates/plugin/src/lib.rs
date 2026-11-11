@@ -28,6 +28,8 @@ const FUEL: u64 = 50_000_000;
 const MEMORY_LIMIT: usize = 64 * 1024 * 1024;
 const MAX_ACTIONS: usize = 100;
 const MAX_TEXT: usize = 1_000_000;
+/// Table entries per table. Without a cap a module can declare a 4-billion-entry table (16 GB).
+const TABLE_LIMIT: usize = 100_000;
 const MAX_REQUEST_TEXT: usize = 200_000;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -219,7 +221,7 @@ fn call(wasm: &[u8], input: &[u8]) -> Result<Vec<u8>, String> {
     if module.imports().next().is_some() {
         return Err("plugins may not import anything".into());
     }
-    let mut store = Store::new(&engine, Host { limits: StoreLimitsBuilder::new().memory_size(MEMORY_LIMIT).instances(1).memories(1).tables(4).build() });
+    let mut store = Store::new(&engine, Host { limits: StoreLimitsBuilder::new().memory_size(MEMORY_LIMIT).instances(1).memories(1).tables(4).table_elements(TABLE_LIMIT).build() });
     store.limiter(|h| &mut h.limits);
     store.set_fuel(FUEL).map_err(|e| e.to_string())?;
     let linker: Linker<Host> = Linker::new(&engine);
