@@ -25,7 +25,8 @@ jobs:
     if: github.event_name == 'push' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
     steps:
       - uses: actions/checkout@v4
-        with: { ref: ${{ env.SHA }} }
+        with:
+          ref: ${{ env.SHA }}
       - name: Version
         run: |
           if [ "$GITHUB_EVENT_NAME" = workflow_run ]; then echo "VERSION=dev-${SHA::7}"; else echo "VERSION=${GITHUB_REF_NAME#v}"; fi >> "$GITHUB_ENV"
@@ -63,7 +64,8 @@ jobs:
     if: github.event_name == 'push' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
     steps:
       - uses: actions/checkout@v4
-        with: { ref: ${{ env.SHA }} }
+        with:
+          ref: ${{ env.SHA }}
       - name: Version
         shell: pwsh
         run: |
