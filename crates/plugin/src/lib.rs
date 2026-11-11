@@ -96,8 +96,9 @@ impl Manifest {
         }
         if let Some(w) = &m.wasm {
             let p = Path::new(w);
-            if p.is_absolute() || p.components().any(|c| !matches!(c, std::path::Component::Normal(_))) {
-                return Err("\"wasm\" must be a file name inside the plugin folder".into());
+            // a plain file name: no folders, so a symbolic link to a folder cannot lead outside the plugin
+            if p.is_absolute() || p.components().count() != 1 || p.components().any(|c| !matches!(c, std::path::Component::Normal(_))) {
+                return Err("\"wasm\" must be a file name inside the plugin folder (no sub-folders)".into());
             }
         }
         Ok(m)

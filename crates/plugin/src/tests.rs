@@ -97,6 +97,7 @@ fn bad_manifests_and_answers_are_rejected_with_a_reason() {
         (r#"{"name":"a","commands":[{"id":"x","title":"X"}]}"#, "wasm"),
         (r#"{"name":"a","wasm":"../evil.wasm"}"#, "inside the plugin folder"),
         (r#"{"name":"a","wasm":"/etc/passwd"}"#, "inside the plugin folder"),
+        (r#"{"name":"a","wasm":"sub/p.wasm"}"#, "inside the plugin folder"),
         (r#"{"name":"a","snippets":[{"id":"x","title":"X","markdown":""},{"id":"x","title":"Y","markdown":""}]}"#, "twice"),
         (r#"{"name":"a","snippets":[{"id":"BAD","title":"X","markdown":""}]}"#, "command id"),
         ("not json", "plugin.json"),
@@ -202,4 +203,17 @@ fn hostile_modules_fail_cleanly_and_fast() {
         // 50 M fuel is ~35 ms in release; allow plenty for debug builds
         assert!(el.as_secs() < 5, "{n} took {el:?}");
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn the_module_cannot_be_reached_through_a_symlinked_folder() {
+    let outside = tmp("outside");
+    std::fs::write(outside.join("p.wat"), FIXED).unwrap();
+    let d = tmp("symdir");
+    std::os::unix::fs::symlink(&outside, d.join("sub")).unwrap();
+    write_plugin(&d, r#"{"name":"sneaky","wasm":"sub/p.wat","commands":[{"id":"hi","title":"Hi"}]}"#, None);
+    assert!(Plugin::load(&d).is_err(), "a module outside the plugin folder must not load");
+    std::fs::remove_dir_all(d).ok();
+    std::fs::remove_dir_all(outside).ok();
 }
